@@ -1,11 +1,11 @@
-import express from "express";
 import { randomUUID } from "node:crypto";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
+import express from "express";
 import { z } from "zod";
-import { fleetStatus, agentOutput, spawnWorker, sendToAgent, taskHistory } from "./fleet.js";
+import { agentOutput, fleetStatus, sendToAgent, spawnWorker, taskHistory } from "./fleet.js";
+import { getHealth, startHealthPoller } from "./health.js";
 import { ask, resetSession } from "./orchestrator.js";
-import { startHealthPoller, getHealth } from "./health.js";
 
 const PORT = Number(process.env.PORT ?? 8787);
 const TOKEN = process.env.FLEET_TOKEN;
@@ -41,7 +41,7 @@ function buildServer(): McpServer {
         })),
       };
       return { content: [{ type: "text", text: JSON.stringify(enriched, null, 2) }] };
-    }
+    },
   );
 
   server.registerTool(
@@ -57,7 +57,7 @@ function buildServer(): McpServer {
     },
     async ({ repo, agent, lines }) => ({
       content: [{ type: "text", text: await agentOutput(repo, agent, lines) }],
-    })
+    }),
   );
 
   server.registerTool(
@@ -67,7 +67,7 @@ function buildServer(): McpServer {
       description: "Completed and past worker tasks for a repo.",
       inputSchema: { repo: z.string() },
     },
-    async ({ repo }) => ({ content: [{ type: "text", text: await taskHistory(repo) }] })
+    async ({ repo }) => ({ content: [{ type: "text", text: await taskHistory(repo) }] }),
   );
 
   server.registerTool(
@@ -78,7 +78,7 @@ function buildServer(): McpServer {
         "Ask the resident orchestrator agent (persistent, runs on the fleet machine) anything about the fleet: status digests, what changed, whether PRs need attention. It inspects logs itself and answers in short spoken-friendly prose. This is the preferred tool for any open question.",
       inputSchema: { question: z.string() },
     },
-    async ({ question }) => ({ content: [{ type: "text", text: await ask(question) }] })
+    async ({ question }) => ({ content: [{ type: "text", text: await ask(question) }] }),
   );
 
   if (CONTROL) {
@@ -86,10 +86,11 @@ function buildServer(): McpServer {
       "spawn_worker",
       {
         title: "Spawn worker",
-        description: "Create a new worker agent on a repo with a one-task mission. It will open a PR when done.",
+        description:
+          "Create a new worker agent on a repo with a one-task mission. It will open a PR when done.",
         inputSchema: { repo: z.string(), task: z.string().min(10) },
       },
-      async ({ repo, task }) => ({ content: [{ type: "text", text: await spawnWorker(repo, task) }] })
+      async ({ repo, task }) => ({ content: [{ type: "text", text: await spawnWorker(repo, task) }] }),
     );
 
     server.registerTool(
@@ -99,7 +100,9 @@ function buildServer(): McpServer {
         description: "Type a message into a running agent's session (tmux). Use for steering or unblocking.",
         inputSchema: { repo: z.string(), agent: z.string(), text: z.string() },
       },
-      async ({ repo, agent, text }) => ({ content: [{ type: "text", text: await sendToAgent(repo, agent, text) }] })
+      async ({ repo, agent, text }) => ({
+        content: [{ type: "text", text: await sendToAgent(repo, agent, text) }],
+      }),
     );
 
     server.registerTool(
@@ -109,7 +112,7 @@ function buildServer(): McpServer {
         description: "Start the resident orchestrator on a fresh conversation (keeps no chat history).",
         inputSchema: {},
       },
-      async () => ({ content: [{ type: "text", text: await resetSession() }] })
+      async () => ({ content: [{ type: "text", text: await resetSession() }] }),
     );
   }
 
@@ -137,16 +140,17 @@ app.all("/mcp", async (req, res) => {
 
   if (!transport) {
     if (req.method !== "POST") return res.status(400).json({ error: "no session" });
-    transport = new StreamableHTTPServerTransport({
+    const created = new StreamableHTTPServerTransport({
       sessionIdGenerator: () => randomUUID(),
       onsessioninitialized: (id) => {
-        transports.set(id, transport!);
+        transports.set(id, created);
       },
     });
-    transport.onclose = () => {
-      if (transport!.sessionId) transports.delete(transport!.sessionId);
+    created.onclose = () => {
+      if (created.sessionId) transports.delete(created.sessionId);
     };
-    await buildServer().connect(transport);
+    await buildServer().connect(created);
+    transport = created;
   }
 
   await transport.handleRequest(req, res, req.body);

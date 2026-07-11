@@ -1,7 +1,7 @@
-import { query } from "@anthropic-ai/claude-agent-sdk";
-import { readFile, writeFile, mkdir } from "node:fs/promises";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { query } from "@anthropic-ai/claude-agent-sdk";
 
 const STATE_DIR = join(homedir(), ".fleet-orchestrator");
 const SESSION_FILE = join(STATE_DIR, "session.json");
@@ -28,7 +28,7 @@ const ALLOWED_COMMANDS: RegExp[] = [
   /^(cat|head|tail|ls|grep|jq) /,
 ];
 
-function commandAllowed(cmd: string): boolean {
+export function commandAllowed(cmd: string): boolean {
   const trimmed = cmd.trim();
   // Reject shell chaining/subshells so the allowlist can't be smuggled past.
   if (/[;&|`$(]/.test(trimmed.replace(/"[^"]*"|'[^']*'/g, ""))) return false;

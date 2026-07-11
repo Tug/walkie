@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
-import { capturePane, windowExists, sessionActivity } from "./tmux.js";
 import { fleetStatus } from "./fleet.js";
+import { capturePane, windowExists } from "./tmux.js";
 
 export type AgentState = "working" | "idle" | "blocked" | "dead";
 
@@ -47,7 +47,7 @@ function classify(pane: string, t: Track, now: number): { status: AgentState; de
 async function probe(target: string, now: number): Promise<void> {
   if (!(await windowExists(target))) {
     const prev = tracks.get(target);
-    if (!prev || prev.status !== "dead") {
+    if (prev?.status !== "dead") {
       tracks.set(target, { hash: "", lastChangeAt: now, status: "dead", statusSince: now });
     }
     return;

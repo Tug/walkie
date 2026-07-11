@@ -20,8 +20,9 @@ Three layers:
 ## Run
 
 ```bash
+bun install
 export FLEET_TOKEN="$(openssl rand -hex 24)"   # keep it somewhere safe
-pnpm start                                      # tsx src/server.ts, listens on 127.0.0.1:8787
+bun start                                       # listens on 127.0.0.1:8787
 ```
 
 Env:
@@ -77,6 +78,17 @@ For a stable hostname use a named Cloudflare tunnel. Remote clients call
   `src/orchestrator.ts`): fleet inspection and steering only, no merges/pushes/edits,
   and chained shell commands are rejected. Widen it consciously.
 - The MCP surface is remote code execution by intent. Treat `FLEET_TOKEN` like an SSH key.
+
+## Development
+
+```bash
+bun test            # unit tests (sanitization, command allowlist)
+bun run typecheck   # tsc, strict
+bun run lint        # biome check
+bun run lint:fix    # biome check --write
+```
+
+CI (GitHub Actions) runs Biome, tsc, and the tests on every push and PR.
 
 ## Credits
 

@@ -36,11 +36,10 @@ export async function sessionActivity(target: string): Promise<number> {
 const CHUNK = 512;
 const ESC_SETTLE_MS = 600;
 
-function sanitize(text: string): string {
+export function sanitize(text: string): string {
   // Strip control chars except \n and \t; strip ANSI escapes.
-  return text
-    .replace(/\x1b\[[0-9;]*[A-Za-z]/g, "")
-    .replace(/[\x00-\x08\x0b-\x1f\x7f]/g, "");
+  // biome-ignore lint/suspicious/noControlCharactersInRegex: matching control chars is the point here
+  return text.replace(/\x1b\[[0-9;]*[A-Za-z]/g, "").replace(/[\x00-\x08\x0b-\x1f\x7f]/g, "");
 }
 
 export async function sendKeysRobust(target: string, text: string): Promise<void> {

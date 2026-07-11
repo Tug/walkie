@@ -1,8 +1,8 @@
 import { execFile } from "node:child_process";
-import { promisify } from "node:util";
 import { readFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { promisify } from "node:util";
 import { capturePane, sendKeysRobust } from "./tmux.js";
 
 const exec = promisify(execFile);

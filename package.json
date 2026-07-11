@@ -4,12 +4,15 @@
   "description": "A walkie-talkie for your Claude fleet: resident orchestrator + MCP surface for hands-free steering.",
   "main": "index.js",
   "scripts": {
-    "start": "tsx src/server.ts",
-    "typecheck": "tsc"
+    "start": "bun src/server.ts",
+    "typecheck": "tsc",
+    "lint": "biome check .",
+    "lint:fix": "biome check --write .",
+    "test": "bun test"
   },
   "keywords": [],
   "author": "",
-  "license": "ISC",
+  "license": "MIT",
   "packageManager": "pnpm@10.33.0",
   "dependencies": {
     "@anthropic-ai/claude-agent-sdk": "^0.3.207",
@@ -18,9 +21,10 @@
     "zod": "^4.4.3"
   },
   "devDependencies": {
+    "@biomejs/biome": "^2.5.3",
+    "@types/bun": "^1.3.14",
     "@types/express": "^5.0.6",
     "@types/node": "^26.1.1",
-    "tsx": "^4.23.0",
     "typescript": "^7.0.2"
   },
   "type": "module"
