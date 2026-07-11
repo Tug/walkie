@@ -57,6 +57,24 @@ sanitize control characters, ESC plus a 600ms settle (below that, readline may t
 Enter into M-Enter and silently never submit), literal text in 512-byte chunks, then
 Enter verified against pane content with backoff retries.
 
+## Voice client
+
+A self-contained web page at `/voice` for hands-free sessions over the OpenAI Realtime API
+(default model `gpt-realtime-2.1-mini`, override with `WALKIE_REALTIME_MODEL`; voice via
+`WALKIE_REALTIME_VOICE`). Requires `OPENAI_API_KEY` on the walkie server.
+
+```
+open http://127.0.0.1:8787/voice   # paste the fleet token, tap Connect, talk
+```
+
+How it works: the server mints a short-lived Realtime client secret (your OpenAI key never
+reaches the browser); the page opens a WebRTC audio session, pulls walkie's tool list from
+the local MCP endpoint, and registers every tool as a Realtime function tool. Tool calls are
+executed by the browser against the same origin, so the fleet token and fleet data never
+transit through OpenAI's tool plumbing (only what enters the conversation does), and no
+public tunnel is needed for local use. Control-lane tools (spawn_worker, send_to_agent,
+reset_orchestrator) pop a tap-to-approve dialog before executing.
+
 ## Expose remotely
 
 ```bash

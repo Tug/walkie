@@ -6,6 +6,7 @@ import { z } from "zod";
 import { agentOutput, fleetStatus, sendToAgent, spawnWorker, taskHistory } from "./fleet.js";
 import { getHealth, startHealthPoller } from "./health.js";
 import { ask, resetSession } from "./orchestrator.js";
+import { voiceRouter } from "./voice.js";
 
 const PORT = Number(process.env.PORT ?? 8787);
 const TOKEN = process.env.FLEET_TOKEN;
@@ -123,13 +124,15 @@ const app = express();
 app.use(express.json({ limit: "1mb" }));
 
 app.use((req, res, next) => {
-  if (req.path === "/healthz") return next();
+  // The voice page is a static shell with no secrets; it authenticates in-page.
+  if (req.path === "/healthz" || (req.path === "/voice" && req.method === "GET")) return next();
   const auth = req.headers.authorization ?? "";
   if (auth !== `Bearer ${TOKEN}`) return res.status(401).json({ error: "unauthorized" });
   next();
 });
 
 app.get("/healthz", (_req, res) => res.json({ ok: true }));
+app.use(voiceRouter);
 
 // Stateful streamable HTTP MCP: one transport per MCP session.
 const transports = new Map<string, StreamableHTTPServerTransport>();
