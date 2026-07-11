@@ -1,0 +1,27 @@
+{
+  "name": "walkie",
+  "version": "1.0.0",
+  "description": "A walkie-talkie for your Claude fleet: resident orchestrator + MCP surface for hands-free steering.",
+  "main": "index.js",
+  "scripts": {
+    "start": "tsx src/server.ts",
+    "typecheck": "tsc"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "packageManager": "pnpm@10.33.0",
+  "dependencies": {
+    "@anthropic-ai/claude-agent-sdk": "^0.3.207",
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "express": "^5.2.1",
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "@types/express": "^5.0.6",
+    "@types/node": "^26.1.1",
+    "tsx": "^4.23.0",
+    "typescript": "^7.0.2"
+  },
+  "type": "module"
+}
