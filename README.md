@@ -75,6 +75,27 @@ transit through OpenAI's tool plumbing (only what enters the conversation does),
 public tunnel is needed for local use. Control-lane tools (spawn_worker, send_to_agent,
 reset_orchestrator) pop a tap-to-approve dialog before executing.
 
+## Mobile app (locked-screen voice)
+
+The web client dies when a phone locks (iOS suspends the tab and the microphone).
+`mobile/` is an Expo app with the same architecture (on-device MCP bridge, ephemeral
+Realtime secrets, tap-to-approve) plus what a locked phone needs: `react-native-webrtc`
+and iOS `UIBackgroundModes: [audio, voip]`, so the session keeps running in a pocket,
+like a call. Uses native modules, so it runs as a custom dev client, not Expo Go.
+
+```bash
+cd mobile && bun install
+bunx eas login                                   # Expo account
+bunx eas device:create                           # register your iPhone (ad hoc)
+bunx eas build --profile internal --platform ios # then install from the build link
+```
+
+Internal distribution installs straight from a link on registered devices, no TestFlight.
+Requires an Apple Developer Program membership for the certificates. Point the app at the
+walkie server URL (LAN IP or tunnel hostname) plus the fleet token; both persist on-device.
+If iOS ever suspends the session mid-pocket, the planned hardening is CallKit via
+react-native-callkeep so walkie sessions present as real calls.
+
 ## Expose remotely
 
 ```bash
