@@ -6,16 +6,19 @@ fleet itself runs entirely on your own machine.
 
 Three layers:
 
-1. **Fleet**: [multiclaude](https://github.com/dlorenc/multiclaude) runs Claude Code agents
-   in tmux windows + git worktrees, one repo per tmux session, PRs gated by CI. Works with
-   zero remote parts; walkie is optional by design.
+1. **Fleet**: walkie's own native backend runs single-task Claude Agent SDK workers, each in
+   its own git worktree, following the target repo's conventions and gated by a capability
+   guard (see [Fleet safety](#fleet-safety-native-backend)). No daemon, no autonomous
+   supervisor, no merge-queue: the walkie server is the only coordinator and acts only on your
+   explicit requests. (An earlier version wrapped [multiclaude](https://github.com/dlorenc/multiclaude);
+   it was dropped after it merged to main and pushed to teammates' branches on its own.)
 2. **Resident orchestrator**: a persistent Claude Agent SDK session on this machine that
    inspects the fleet (status, logs, PRs) under a strict command allowlist and answers in
    short, voice-friendly prose. Summarization happens here, so remote clients only ever
    receive small digests.
-3. **MCP surface**: streamable HTTP MCP with bearer auth, so any remote client
-   (claude.ai custom connector, OpenAI Realtime voice session, another Claude Code) can
-   pilot the fleet.
+3. **MCP surface**: streamable HTTP MCP with bearer auth (or Google Workspace SSO), so any
+   remote client (claude.ai custom connector, OpenAI Realtime voice session, another Claude
+   Code) can pilot the fleet.
 
 ## Run
 
@@ -29,33 +32,27 @@ Env:
 
 - `FLEET_TOKEN` (required): bearer token for every MCP request.
 - `FLEET_CONTROL=off`: hide the write tools (spawn_worker, send_to_agent) for a read-only surface.
-- `PORT` (default 8787), `MULTICLAUDE_BIN` (default ~/go/bin/multiclaude).
+- `WALKIE_REPOS` (required to spawn): JSON allowlist of repos, default-deny.
+- `PORT` (default 8787).
 
 ## Tools
 
-Read lane (deterministic): `fleet_status` (includes live health), `agent_output`, `task_history`.
+Read lane (deterministic): `fleet_status` (includes worker status), `agent_output`
+(a worker's activity log), `task_history`.
 Brain: `ask_orchestrator` (preferred for open questions; summaries happen Mac-side).
-Control lane: `spawn_worker`, `send_to_agent`, `reset_orchestrator`.
+Control lane: `spawn_worker`, `reset_orchestrator`.
 
-## Health model
+## Worker status
 
-A poller hashes each agent's pane every 5s and classifies:
+Each native worker reports its lifecycle into `fleet_status`, sourced from the Agent SDK run
+(not terminal scraping): `starting` → `working` → `done` / `error`, or `killed`. Each carries
+`createdAt` / `updatedAt` and a short `summary` on completion, so a voice answer can say
+"one worker done, one still working" without any LLM reading terminals.
 
-- `working`: pane changing, or Claude Code's "esc to interrupt" status line visible
-- `blocked`: pane stable and a known human-decision prompt is on screen (permission,
-  trust, yes/no dialog), with the matched reason in `detail`
-- `idle`: pane stable 45s with no prompt
-- `dead`: tmux window gone
-
-Each status carries `since` and `lastActivityAt`, so a voice answer can say
-"one agent blocked 25 minutes on a permission prompt" without any LLM reading terminals.
-
-## Message delivery
-
-`send_to_agent` uses a hardened protocol (adapted from gastown's tmux scar tissue):
-sanitize control characters, ESC plus a 600ms settle (below that, readline may turn
-Enter into M-Enter and silently never submit), literal text in 512-byte chunks, then
-Enter verified against pane content with backoff retries.
+> Legacy: a tmux pane-hash health poller and the gastown-derived `send_to_agent` tmux delivery
+> remain in the tree from the multiclaude era. They do not apply to native workers (which are
+> not tmux sessions) and are slated for removal or replacement by a native "message a running
+> worker" path.
 
 ## Voice client
 
@@ -181,8 +178,8 @@ CI (GitHub Actions) runs Biome, tsc, and the tests on every push and PR.
 
 ## Credits
 
-Fleet layer by [multiclaude](https://github.com/dlorenc/multiclaude) (default backend;
-`src/fleet.ts` is the only backend-specific file, adapters welcome). Delivery protocol and
-health taxonomy adapted from [gastown](https://github.com/gastownhall/gastown) (MIT).
-Blocked-prompt detection concept from claude-squad (AGPL: concept only, no code).
-Structured-log ideas from vibe-kanban (Apache-2.0).
+Design informed by prior art: [multiclaude](https://github.com/dlorenc/multiclaude) (the
+original wrapped backend, since replaced by the native one) and the tmux delivery protocol
+adapted from [gastown](https://github.com/gastownhall/gastown) (MIT); blocked-prompt detection
+concept from claude-squad (AGPL: concept only, no code); structured-log ideas from
+vibe-kanban (Apache-2.0).
