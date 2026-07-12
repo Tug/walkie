@@ -33,19 +33,33 @@ export default function App() {
   const [muted, setMuted] = useState(false);
   const [approval, setApproval] = useState<ApprovalRequest | null>(null);
   const [draft, setDraft] = useState("");
+  const [sessionEmail, setSessionEmail] = useState<string | null>(null);
   const session = useRef<VoiceSession | null>(null);
   const scroll = useRef<ScrollView>(null);
 
   useEffect(() => {
-    AsyncStorage.getMany(["serverUrl", "fleetToken"]).then((vals) => {
-      if (vals.serverUrl) setServerUrl(vals.serverUrl);
+    (async () => {
+      const vals = await AsyncStorage.getMany(["serverUrl", "fleetToken"]);
       if (vals.fleetToken) setToken(vals.fleetToken);
-    });
+      // On web the app is served by the walkie server itself: default to that origin
+      // and detect an existing cookie session (AUTH_MODE=google).
+      const origin = Platform.OS === "web" ? ((globalThis as any).location?.origin ?? "") : "";
+      const base = vals.serverUrl || origin;
+      if (base) setServerUrl(base);
+      if (origin) {
+        try {
+          const me = await fetch(`${origin}/auth/me`);
+          if (me.ok) setSessionEmail(((await me.json()) as { email?: string }).email ?? null);
+        } catch {
+          // no session: manual token entry
+        }
+      }
+    })();
   }, []);
 
   async function connect() {
     const base = serverUrl.trim().replace(/\/$/, "");
-    if (!base || (!token.trim() && Platform.OS !== "web")) {
+    if (!base || (!token.trim() && !sessionEmail && Platform.OS !== "web")) {
       setStatus("Server URL and token are required (on web, a session cookie also works)");
       return;
     }
@@ -133,9 +147,10 @@ export default function App() {
             value={serverUrl}
             onChangeText={setServerUrl}
           />
+          {sessionEmail && <Text style={styles.signedIn}>Signed in as {sessionEmail}</Text>}
           <TextInput
             style={styles.input}
-            placeholder="Fleet token"
+            placeholder={sessionEmail ? "Token (optional: you are signed in)" : "Fleet token"}
             placeholderTextColor="#5c6b78"
             secureTextEntry
             value={token}
@@ -262,6 +277,7 @@ const styles = StyleSheet.create({
   attach: { paddingHorizontal: 14 },
   transcriptText: { color: "#c9d4dc", fontSize: 15, lineHeight: 22 },
   status: { color: "#9fb0bd", fontSize: 13, paddingVertical: 16, minHeight: 40 },
+  signedIn: { color: "#3ba55c", fontSize: 14, marginBottom: 12, textAlign: "center" },
   modalBackdrop: { flex: 1, backgroundColor: "rgba(0,0,0,0.7)", alignItems: "center", justifyContent: "center" },
   card: { backgroundColor: "#181f26", borderRadius: 14, padding: 22, width: "88%", maxWidth: 420 },
   cardTitle: { color: "#e8ecef", fontSize: 17, fontWeight: "700", marginBottom: 10 },
