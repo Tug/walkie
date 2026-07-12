@@ -84,3 +84,8 @@ export async function sendToAgent(repo: string, agent: string, text: string): Pr
 export async function taskHistory(repo: string): Promise<string> {
   return run(MC, ["history", repo]);
 }
+
+/** Destructive: removes a worker agent and its worktree (any uncommitted work is lost). */
+export async function killWorker(agent: string): Promise<string> {
+  return run(MC, ["worker", "rm", agent], 60_000);
+}

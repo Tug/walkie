@@ -8,9 +8,10 @@ import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/
 import express from "express";
 import { z } from "zod";
 import { authMiddleware, loadAuthConfig, registerAuthRoutes } from "./auth.js";
-import { agentOutput, fleetStatus, sendToAgent, spawnWorker, taskHistory } from "./fleet.js";
+import { agentOutput, fleetStatus, killWorker, sendToAgent, spawnWorker, taskHistory } from "./fleet.js";
 import { getHealth, startHealthPoller } from "./health.js";
 import { ask, resetSession } from "./orchestrator.js";
+import { CONSENT_PROMPT_EN, consentValid } from "./risk.js";
 import { voiceRouter } from "./voice.js";
 
 const PORT = Number(process.env.PORT ?? 8787);
@@ -124,6 +125,40 @@ function buildServer(): McpServer {
         inputSchema: {},
       },
       async () => ({ content: [{ type: "text", text: await resetSession() }] }),
+    );
+
+    server.registerTool(
+      "kill_worker",
+      {
+        title: "Remove a worker (destructive)",
+        description:
+          "DESTRUCTIVE: permanently removes a worker agent and its git worktree; any uncommitted " +
+          "work is lost. Requires explicit spoken consent: ask the user to say exactly " +
+          `"${CONSENT_PROMPT_EN}", then pass their words verbatim in the consent field.`,
+        inputSchema: {
+          agent: z.string().describe("Worker name to remove"),
+          consent: z
+            .string()
+            .describe(`The user's verbatim spoken consent phrase, e.g. "${CONSENT_PROMPT_EN}"`),
+        },
+      },
+      async ({ agent, consent }) => {
+        if (!consentValid(consent)) {
+          return {
+            isError: true,
+            content: [
+              {
+                type: "text",
+                text:
+                  `Refused: removing ${agent} is destructive and needs explicit consent. ` +
+                  `Tell the user it will permanently delete the worker and its uncommitted work, ` +
+                  `then ask them to say exactly: "${CONSENT_PROMPT_EN}". Call again with that verbatim consent.`,
+              },
+            ],
+          };
+        }
+        return { content: [{ type: "text", text: await killWorker(agent) }] };
+      },
     );
   }
 

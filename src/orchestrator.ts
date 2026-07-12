@@ -79,7 +79,9 @@ async function runQuery(question: string): Promise<string> {
       },
       resume: sessionId,
       cwd: join(homedir(), ".multiclaude"),
-      allowedTools: ["Bash", "Read", "Grep", "Glob", "Write", "Edit"],
+      // NOTE: no allowedTools here. Bare allowedTools entries auto-approve the whole
+      // tool BEFORE canUseTool is consulted (CLAUDE_SDK_CAN_USE_TOOL_SHADOWED), which
+      // would bypass the gates below. Every tool call must fall through to canUseTool.
       canUseTool: async (toolName, input) => {
         if (toolName === "Bash") {
           const cmd = String((input as { command?: string }).command ?? "");
@@ -93,8 +95,10 @@ async function runQuery(question: string): Promise<string> {
             ? { behavior: "allow", updatedInput: input }
             : { behavior: "deny", message: `Writes are only allowed under ~/.fleet-orchestrator/: ${file}` };
         }
-        // Read/Grep/Glob are read-only: allow.
-        return { behavior: "allow", updatedInput: input };
+        if (toolName === "Read" || toolName === "Grep" || toolName === "Glob" || toolName === "TodoWrite") {
+          return { behavior: "allow", updatedInput: input };
+        }
+        return { behavior: "deny", message: `Tool ${toolName} is not available to the fleet orchestrator` };
       },
       maxTurns: 30,
     },
