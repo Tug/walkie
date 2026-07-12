@@ -4,11 +4,12 @@
   "description": "A walkie-talkie for your Claude fleet: resident orchestrator + MCP surface for hands-free steering.",
   "main": "index.js",
   "scripts": {
-    "start": "bun src/server.ts",
+    "start": "bun --env-file=.env src/server.ts",
     "typecheck": "tsc",
     "lint": "biome check .",
     "lint:fix": "biome check --write .",
-    "test": "bun test"
+    "test": "bun test",
+    "dev": "bun --env-file=.env --watch src/server.ts"
   },
   "keywords": [],
   "author": "",
