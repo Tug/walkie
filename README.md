@@ -96,6 +96,20 @@ walkie server URL (LAN IP or tunnel hostname) plus the fleet token; both persist
 If iOS ever suspends the session mid-pocket, the planned hardening is CallKit via
 react-native-callkeep so walkie sessions present as real calls.
 
+### Same app in the browser (Expo web)
+
+The app also targets the web: WebRTC goes through a platform adapter (`src/rtc.ts` native,
+`src/rtc.web.ts` browser). Two ways to run it:
+
+```bash
+cd mobile && bun run web          # dev: Expo serves it, CORS on the server allows the origin
+bun run --cwd mobile export:web   # prod: builds mobile/dist, served by walkie at /app
+```
+
+The `/app` route on the walkie server serves the exported build same-origin, so the desktop
+browser client and the phone app are the same codebase. `public/voice.html` remains as a
+zero-build fallback.
+
 ## Expose remotely
 
 ```bash

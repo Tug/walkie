@@ -1,7 +1,8 @@
 import { randomUUID } from "node:crypto";
 import { appendFile, mkdir } from "node:fs/promises";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import express from "express";
@@ -129,13 +130,29 @@ function buildServer(): McpServer {
 const app = express();
 app.use(express.json({ limit: "1mb" }));
 
+// CORS: lets the Expo web app (dev server on another port) call the MCP and voice
+// endpoints. Auth stays bearer-token; no cookies involved.
 app.use((req, res, next) => {
-  // The voice page is a static shell with no secrets; it authenticates in-page.
-  if (req.path === "/healthz" || (req.path === "/voice" && req.method === "GET")) return next();
+  res.setHeader("Access-Control-Allow-Origin", "*");
+  res.setHeader("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS");
+  res.setHeader("Access-Control-Allow-Headers", "Authorization, Content-Type, Accept, mcp-session-id");
+  res.setHeader("Access-Control-Expose-Headers", "mcp-session-id");
+  if (req.method === "OPTIONS") return res.sendStatus(204);
+  next();
+});
+
+app.use((req, res, next) => {
+  // Static shells hold no secrets; they authenticate in-page.
+  const isStaticShell = req.method === "GET" && (req.path === "/voice" || req.path.startsWith("/app"));
+  if (req.path === "/healthz" || isStaticShell) return next();
   const auth = req.headers.authorization ?? "";
   if (auth !== `Bearer ${TOKEN}`) return res.status(401).json({ error: "unauthorized" });
   next();
 });
+
+// Expo web export (mobile/dist), when built: bun run --cwd mobile export:web
+const WEB_DIST = join(dirname(fileURLToPath(import.meta.url)), "..", "mobile", "dist");
+app.use("/app", express.static(WEB_DIST));
 
 app.get("/healthz", (_req, res) => res.json({ ok: true }));
 app.use(voiceRouter);

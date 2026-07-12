@@ -10,7 +10,9 @@
     "expo-image-picker": "^57.0.2",
     "expo-status-bar": "~57.0.0",
     "react": "19.2.3",
+    "react-dom": "19.2.3",
     "react-native": "0.86.0",
+    "react-native-web": "^0.21.2",
     "react-native-webrtc": "^124.0.7"
   },
   "devDependencies": {
@@ -23,7 +25,8 @@
     "android": "expo run:android",
     "ios": "expo run:ios",
     "web": "expo start --web",
-    "build:ios": "eas build --profile development --platform ios"
+    "build:ios": "eas build --profile development --platform ios",
+    "export:web": "expo export --platform web"
   },
   "private": true
 }

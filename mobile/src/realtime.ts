@@ -1,5 +1,5 @@
-import { mediaDevices, MediaStream, RTCPeerConnection } from "react-native-webrtc";
 import type { McpClient, McpTool } from "./mcp";
+import { attachRemoteAudio, createPeerConnection, getMicStream } from "./rtc";
 
 export const CONTROL_TOOLS = new Set(["spawn_worker", "send_to_agent", "reset_orchestrator"]);
 
@@ -49,11 +49,11 @@ export async function startVoiceSession(
   const { value: ephemeral, model } = await sec.json();
 
   cb.onStatus("Opening microphone…");
-  const mic: MediaStream = await mediaDevices.getUserMedia({ audio: true });
+  const mic = await getMicStream();
 
-  const pc = new RTCPeerConnection({});
+  const pc = createPeerConnection();
   for (const track of mic.getTracks()) pc.addTrack(track, mic);
-  // Remote audio plays automatically in react-native-webrtc once the track arrives.
+  attachRemoteAudio(pc);
 
   const dc = pc.createDataChannel("oai-events");
   // react-native-webrtc's RTCDataChannel extends event-target-shim, whose typings
