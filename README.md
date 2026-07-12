@@ -123,6 +123,30 @@ For a stable hostname use a named Cloudflare tunnel. Remote clients call
 - OpenAI Realtime (voice): session tool `{type: "mcp", server_url, authorization}`;
   put `spawn_worker`/`send_to_agent` behind `require_approval`.
 
+## Fleet safety (confined native backend)
+
+walkie spawns its own single-task workers, it does **not** use multiclaude's `init` topology
+(no daemon, no autonomous supervisor, no merge-queue agent). The walkie server is the only
+coordinator and acts only on explicit `spawn_worker` requests. Each worker:
+
+- runs in a throwaway git worktree on a fresh `walkie/<slug>` branch off `origin/<base>`;
+- is gated by a command guard (`src/gitguard.ts`): it may commit, merge/rebase `origin/main`
+  *in*, push **only its own branch**, and open a PR, and it can never merge (no `gh pr merge`,
+  no merge API), force-push, `--no-verify`, retarget the remote, or push any other ref;
+- opens a PR and stops; a human merges.
+
+Repos are **default-deny**: walkie refuses any repo not in `WALKIE_REPOS` (JSON allowlist),
+and the only supported mode is `confined`. Example:
+
+```
+WALKIE_REPOS='[{"name":"my-toy","url":"git@github.com:me/my-toy.git","mode":"confined"}]'
+```
+
+The command guard is the primary enforcement. For a *hard* guarantee on shared repos (so a
+misbehaving agent physically cannot merge or push outside `walkie/*` regardless of the guard),
+run the fleet under a dedicated bot identity whose token has no merge rights and push access
+limited to `walkie/*`, plus branch protection on the default branch. See DEPLOY.md.
+
 ## Security model
 
 - Server binds to localhost only; the tunnel is the sole remote path.

@@ -8,9 +8,16 @@ import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/
 import express from "express";
 import { z } from "zod";
 import { authMiddleware, loadAuthConfig, registerAuthRoutes } from "./auth.js";
-import { agentOutput, fleetStatus, killWorker, sendToAgent, spawnWorker, taskHistory } from "./fleet.js";
+import { agentOutput, fleetStatus, sendToAgent, taskHistory } from "./fleet.js";
+import {
+  killNativeWorker,
+  listNativeWorkers,
+  nativeWorkerOutput,
+  spawnNativeWorker,
+} from "./fleet-native.js";
 import { getHealth, startHealthPoller } from "./health.js";
 import { ask, resetSession } from "./orchestrator.js";
+import { repoPolicy } from "./policy.js";
 import { CONSENT_PROMPT_EN, consentValid } from "./risk.js";
 import { voiceRouter } from "./voice.js";
 
@@ -51,6 +58,8 @@ function buildServer(): McpServer {
             health: getHealth(`${r.tmux_session ?? `mc-${r.name}`}:${a.tmux_window ?? a.name}`),
           })),
         })),
+        // walkie-native confined workers (the go-forward backend).
+        workers: await listNativeWorkers(),
       };
       return { content: [{ type: "text", text: JSON.stringify(enriched, null, 2) }] };
     },
@@ -60,16 +69,21 @@ function buildServer(): McpServer {
     "agent_output",
     {
       title: "Agent output",
-      description: "Raw tail of one agent's terminal (tmux capture). Prefer ask_orchestrator for summaries.",
+      description:
+        "Recent activity log for a worker. Prefer ask_orchestrator for summaries. For a native " +
+        "worker pass its name; the repo arg is optional and only used for legacy tmux agents.",
       inputSchema: {
-        repo: z.string().describe("Repo name as shown in fleet_status"),
-        agent: z.string().describe("Agent name, e.g. supervisor or clever-fox"),
+        agent: z.string().describe("Worker name as shown in fleet_status"),
+        repo: z.string().optional().describe("Only for legacy tmux agents"),
         lines: z.number().int().min(10).max(2000).default(100),
       },
     },
-    async ({ repo, agent, lines }) => ({
-      content: [{ type: "text", text: await agentOutput(repo, agent, lines) }],
-    }),
+    async ({ repo, agent, lines }) => {
+      const native = await nativeWorkerOutput(agent, lines);
+      if (!native.startsWith("No log for worker")) return { content: [{ type: "text", text: native }] };
+      if (repo) return { content: [{ type: "text", text: await agentOutput(repo, agent, lines) }] };
+      return { content: [{ type: "text", text: native }] };
+    },
   );
 
   server.registerTool(
@@ -99,10 +113,24 @@ function buildServer(): McpServer {
       {
         title: "Spawn worker",
         description:
-          "Create a new worker agent on a repo with a one-task mission. It will open a PR when done.",
+          "Create a confined worker on an allowlisted repo. It works in a throwaway worktree on its " +
+          "own walkie/* branch, opens a PR, and can never merge or touch other branches. Refuses repos " +
+          "not in walkie's allowlist.",
         inputSchema: { repo: z.string(), task: z.string().min(10) },
       },
-      async ({ repo, task }) => ({ content: [{ type: "text", text: await spawnWorker(repo, task) }] }),
+      async ({ repo, task }) => {
+        const pol = repoPolicy(repo);
+        if (!pol.ok) return { isError: true, content: [{ type: "text", text: pol.reason }] };
+        const r = await spawnNativeWorker(pol.policy, task);
+        return {
+          content: [
+            {
+              type: "text",
+              text: `Spawned confined worker ${r.name} on ${repo}, branch ${r.branch}. It will open a PR; nothing is merged.`,
+            },
+          ],
+        };
+      },
     );
 
     server.registerTool(
@@ -157,7 +185,7 @@ function buildServer(): McpServer {
             ],
           };
         }
-        return { content: [{ type: "text", text: await killWorker(agent) }] };
+        return { content: [{ type: "text", text: await killNativeWorker(agent) }] };
       },
     );
   }
