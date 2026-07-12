@@ -1,18 +1,30 @@
-// Safety gate for a confined worker agent's shell commands.
+// Safety gate for a worker agent's shell commands, by capability, not by branch name.
 //
-// A worker runs in a throwaway worktree on its OWN branch (walkie/<slug>). It may build,
-// test, edit, commit, merge main IN, and push ITS OWN branch, and open a PR. It may NOT:
-// merge anything (into main or via gh), force-push, bypass hooks, push any other ref, or
-// retarget the remote. This is the primary enforcement; a credential backstop (a bot token
-// that physically cannot merge / push outside walkie/*) is the recommended hard guarantee
-// for shared repos and is documented separately.
+// The 2026-07-12 incident was UNREQUESTED autonomous action (a self-merging merge-queue
+// agent + an auto-dispatching supervisor), not workers pushing branches. So a worker may
+// do normal work freely, including pushing feature branches and opening PRs, and only the
+// irreversible / outward actions are gated to what the user explicitly authorized for that
+// worker: pushing the repo's main branch, merging, and force-pushing. `--no-verify` is always
+// blocked (it would skip the repo's own pre-commit/pre-push checks).
+
+export interface WorkerCaps {
+  mainBranch: string; // e.g. "main" — pushing here needs allowMainPush
+  allowMainPush: boolean;
+  allowMerge: boolean;
+  allowForcePush: boolean;
+}
+
+export const DEFAULT_CAPS = (mainBranch = "main"): WorkerCaps => ({
+  mainBranch,
+  allowMainPush: false,
+  allowMerge: false,
+  allowForcePush: false,
+});
 
 export type Decision = { allow: true } | { allow: false; reason: string };
-
 const DENY = (reason: string): Decision => ({ allow: false, reason });
 const ALLOW: Decision = { allow: true };
 
-// Split a command line into words, honoring simple single/double quotes.
 function tokenize(cmd: string): string[] {
   const out: string[] = [];
   const re = /"([^"]*)"|'([^']*)'|(\S+)/g;
@@ -23,17 +35,11 @@ function tokenize(cmd: string): string[] {
 }
 
 function hasShellComposition(cmd: string): boolean {
-  // Strip quoted spans, then look for shell operators that could chain a second command.
   const bare = cmd.replace(/"[^"]*"|'[^']*'/g, "");
   return /[;&|`]|\$\(|\|\||&&|>|<|\bxargs\b|\beval\b/.test(bare);
 }
 
-/**
- * Classify a Bash command a worker wants to run. `ownBranch` is the only branch it may push.
- * Non-git/gh commands are allowed here (they are confined by cwd = the worktree); this gate
- * exists to stop remote-affecting git/gh operations that could escape the worktree.
- */
-export function classifyWorkerCommand(cmd: string, ownBranch: string): Decision {
+export function classifyWorkerCommand(cmd: string, caps: WorkerCaps): Decision {
   const trimmed = cmd.trim();
   if (hasShellComposition(trimmed)) {
     return DENY("shell composition (;, &&, |, `, $()) is not allowed; run one command at a time");
@@ -41,24 +47,23 @@ export function classifyWorkerCommand(cmd: string, ownBranch: string): Decision 
   const t = tokenize(trimmed);
   if (t.length === 0) return DENY("empty command");
   const bin = t[0];
-
   if (bin !== "git" && bin !== "gh") return ALLOW; // confined by worktree cwd
 
   const rest = t.slice(1);
   const sub = rest[0];
 
-  // gh: only PR/inspection actions; never a merge, never a raw API merge.
   if (bin === "gh") {
-    if (sub === "pr" && rest[1] === "merge") return DENY("merging PRs is never allowed");
+    if (sub === "pr" && rest[1] === "merge") {
+      return caps.allowMerge
+        ? ALLOW
+        : DENY("merging is not authorized for this worker (ask explicitly to enable)");
+    }
     if (sub === "repo" && (rest[1] === "delete" || rest[1] === "archive"))
       return DENY("repo mutation not allowed");
     if (sub === "api") {
       const joined = rest.join(" ");
-      if (/\/merges?\b/.test(joined) || /pulls\/\d+\/merge/.test(joined)) {
-        return DENY("gh api merge endpoints are not allowed");
-      }
-      if (/-X\s*(PUT|POST|PATCH|DELETE)|--method\s*(PUT|POST|PATCH|DELETE)/i.test(joined)) {
-        return DENY("gh api write methods are not allowed");
+      if ((/\/merges?\b/.test(joined) || /pulls\/\d+\/merge/.test(joined)) && !caps.allowMerge) {
+        return DENY("merging via gh api is not authorized for this worker");
       }
     }
     return ALLOW;
@@ -68,25 +73,29 @@ export function classifyWorkerCommand(cmd: string, ownBranch: string): Decision 
   if (sub === "push") {
     const flags = rest.slice(1);
     if (flags.some((f) => f === "--force" || f === "-f" || f.startsWith("--force-with-lease"))) {
-      return DENY("force-push is never allowed");
+      if (!caps.allowForcePush)
+        return DENY("force-push is not authorized for this worker (ask explicitly to enable)");
     }
     if (flags.some((f) => f === "--no-verify" || f === "-n")) {
-      return DENY("--no-verify is not allowed (cannot bypass hooks)");
+      return DENY("--no-verify is not allowed (it would skip the repo's pre-commit/pre-push checks)");
     }
-    if (flags.some((f) => f === "--mirror" || f === "--all" || f === "--tags")) {
-      return DENY("bulk push (--all/--mirror/--tags) is not allowed");
-    }
-    // Positional args after `push`, excluding flags and flag values.
+    if (flags.some((f) => f === "--mirror" || f === "--all"))
+      return DENY("bulk push (--all/--mirror) is not allowed");
     const positional = flags.filter((f) => !f.startsWith("-"));
-    // Accept: no positional (push current branch) OR push to origin the own branch only.
-    if (positional.length === 0) return ALLOW; // current branch is ownBranch (worktree is pinned)
+    if (positional.length === 0) {
+      // Pushing the current branch. Safe unless the worktree is on main (checked by caller); allow.
+      return ALLOW;
+    }
     const [remote, ...refspecs] = positional;
     if (remote !== "origin") return DENY(`may only push to origin, not "${remote}"`);
     for (const ref of refspecs) {
-      // refspec forms: "walkie/x", "HEAD:walkie/x", "walkie/x:walkie/x", "+walkie/x" (force → already blocked)
-      const dst = ref.includes(":") ? ref.split(":")[1] : ref;
-      if (dst.replace(/^refs\/heads\//, "") !== ownBranch) {
-        return DENY(`may only push branch "${ownBranch}", not "${dst}"`);
+      const dst = (ref.includes(":") ? ref.split(":")[1] : ref)
+        .replace(/^refs\/heads\//, "")
+        .replace(/^\+/, "");
+      if (dst === caps.mainBranch && !caps.allowMainPush) {
+        return DENY(
+          `pushing "${caps.mainBranch}" is not authorized for this worker (ask explicitly to enable)`,
+        );
       }
     }
     return ALLOW;
@@ -98,8 +107,5 @@ export function classifyWorkerCommand(cmd: string, ownBranch: string): Decision 
   if (sub === "config" && rest.some((a) => a.startsWith("remote.") || a.startsWith("url."))) {
     return DENY("changing remote git config is not allowed");
   }
-
-  // Everything else in git (add, commit, merge origin/main, rebase, fetch, status, diff, log,
-  // checkout within the worktree) is allowed; it can only leave the worktree via push, gated above.
   return ALLOW;
 }

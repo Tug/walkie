@@ -113,21 +113,47 @@ function buildServer(): McpServer {
       {
         title: "Spawn worker",
         description:
-          "Create a confined worker on an allowlisted repo. It works in a throwaway worktree on its " +
-          "own walkie/* branch, opens a PR, and can never merge or touch other branches. Refuses repos " +
-          "not in walkie's allowlist.",
-        inputSchema: { repo: z.string(), task: z.string().min(10) },
+          "Create a worker on an allowlisted repo. It works in its own worktree, follows the repo's " +
+          "conventions, and by default opens a PR (a human merges). The irreversible actions below are " +
+          "OFF unless the user explicitly asks; setting any of them requires the user's verbatim consent " +
+          `phrase ("${CONSENT_PROMPT_EN}") in the consent field. Refuses repos not in walkie's allowlist.`,
+        inputSchema: {
+          repo: z.string(),
+          task: z.string().min(10),
+          allowMainPush: z.boolean().optional().describe("Let the worker push the main branch directly"),
+          allowMerge: z.boolean().optional().describe("Let the worker merge PRs"),
+          allowForcePush: z.boolean().optional().describe("Let the worker force-push"),
+          consent: z
+            .string()
+            .optional()
+            .describe(`Required if any allow* is true: the user's verbatim "${CONSENT_PROMPT_EN}"`),
+        },
       },
-      async ({ repo, task }) => {
+      async ({ repo, task, allowMainPush, allowMerge, allowForcePush, consent }) => {
         const pol = repoPolicy(repo);
         if (!pol.ok) return { isError: true, content: [{ type: "text", text: pol.reason }] };
-        const r = await spawnNativeWorker(pol.policy, task);
+        const wantsElevated = Boolean(allowMainPush || allowMerge || allowForcePush);
+        if (wantsElevated && !consentValid(consent)) {
+          return {
+            isError: true,
+            content: [
+              {
+                type: "text",
+                text:
+                  `Pushing main, merging, or force-pushing is elevated. Confirm the user explicitly asked for it, ` +
+                  `then have them say exactly: "${CONSENT_PROMPT_EN}", and pass it as consent.`,
+              },
+            ],
+          };
+        }
+        const grant = wantsElevated ? { allowMainPush, allowMerge, allowForcePush } : {};
+        const r = await spawnNativeWorker(pol.policy, task, grant);
+        const scope = wantsElevated
+          ? `authorized to ${[allowMainPush && "push main", allowMerge && "merge", allowForcePush && "force-push"].filter(Boolean).join(", ")}`
+          : "PR-only (no merge/main-push/force-push)";
         return {
           content: [
-            {
-              type: "text",
-              text: `Spawned confined worker ${r.name} on ${repo}, branch ${r.branch}. It will open a PR; nothing is merged.`,
-            },
+            { type: "text", text: `Spawned worker ${r.name} on ${repo} (branch ${r.branch}), ${scope}.` },
           ],
         };
       },
