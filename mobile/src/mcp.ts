@@ -17,7 +17,7 @@ export class McpClient {
 
   private headers(): Record<string, string> {
     return {
-      Authorization: `Bearer ${this.token}`,
+      ...(this.token ? { Authorization: `Bearer ${this.token}` } : {}),
       "Content-Type": "application/json",
       Accept: "application/json, text/event-stream",
       ...(this.sid ? { "mcp-session-id": this.sid } : {}),

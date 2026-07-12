@@ -73,18 +73,19 @@ $("token").value = token;
 
 // ---------- Minimal MCP client (streamable HTTP, same origin) ----------
 let mcpSid = null, mcpId = 0;
+const authHeaders = () => (token ? { Authorization: `Bearer ${token}` } : {});
 async function mcpRequest(method, params) {
   const res = await fetch("/mcp", {
     method: "POST",
     headers: {
-      Authorization: `Bearer ${token}`,
+      ...authHeaders(),
       "Content-Type": "application/json",
       Accept: "application/json, text/event-stream",
       ...(mcpSid ? { "mcp-session-id": mcpSid } : {}),
     },
     body: JSON.stringify({ jsonrpc: "2.0", id: ++mcpId, method, params }),
   });
-  if (res.status === 401) throw new Error("Fleet token rejected");
+  if (res.status === 401) throw new Error("Unauthorized: paste a token, or sign in at /auth/login");
   mcpSid = res.headers.get("mcp-session-id") || mcpSid;
   const text = await res.text();
   const data = text.split("\n").filter((l) => l.startsWith("data: ")).map((l) => JSON.parse(l.slice(6)));
@@ -96,7 +97,7 @@ async function mcpNotify(method) {
   await fetch("/mcp", {
     method: "POST",
     headers: {
-      Authorization: `Bearer ${token}`,
+      ...authHeaders(),
       "Content-Type": "application/json",
       Accept: "application/json, text/event-stream",
       "mcp-session-id": mcpSid,
@@ -134,14 +135,14 @@ function log(type, data = {}) {
   if (!logSession) return;
   fetch("/voice/log", {
     method: "POST",
-    headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+    headers: { ...authHeaders(), "Content-Type": "application/json" },
     body: JSON.stringify({ session: logSession, events: [{ type, ...data }] }),
   }).catch(() => {});
 }
 
 async function connect() {
   token = $("token").value.trim();
-  if (!token) return status("Enter the fleet token first");
+  // Empty token is fine when the browser has a session cookie (AUTH_MODE=google).
   localStorage.setItem("fleetToken", token);
 
   try {
@@ -149,10 +150,7 @@ async function connect() {
     const tools = await mcpInit();
 
     status("Minting session key…");
-    const sec = await fetch("/voice/secret", {
-      method: "POST",
-      headers: { Authorization: `Bearer ${token}` },
-    });
+    const sec = await fetch("/voice/secret", { method: "POST", headers: authHeaders() });
     if (!sec.ok) throw new Error((await sec.json()).error || `secret endpoint: ${sec.status}`);
     const { value: ephemeral, model } = await sec.json();
 

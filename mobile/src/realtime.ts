@@ -31,7 +31,7 @@ export async function startVoiceSession(
   const log = (type: string, data: object = {}) => {
     fetch(`${serverUrl}/voice/log`, {
       method: "POST",
-      headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+      headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}), "Content-Type": "application/json" },
       body: JSON.stringify({ session: logSession, events: [{ type, ...data }] }),
     }).catch(() => {});
   };
@@ -40,7 +40,7 @@ export async function startVoiceSession(
   cb.onStatus("Minting session key…");
   const sec = await fetch(`${serverUrl}/voice/secret`, {
     method: "POST",
-    headers: { Authorization: `Bearer ${token}` },
+    headers: token ? { Authorization: `Bearer ${token}` } : {},
   });
   if (!sec.ok) {
     const body = await sec.json().catch(() => ({ error: `secret endpoint: ${sec.status}` }));

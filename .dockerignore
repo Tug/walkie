@@ -1,0 +1,12 @@
+node_modules
+mobile/node_modules
+mobile/dist
+mobile/ios
+mobile/android
+mobile/.expo
+.git
+.env
+.env.*
+*.log
+.github
+tests

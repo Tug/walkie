@@ -7,6 +7,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import express from "express";
 import { z } from "zod";
+import { authMiddleware, loadAuthConfig, registerAuthRoutes } from "./auth.js";
 import { agentOutput, fleetStatus, sendToAgent, spawnWorker, taskHistory } from "./fleet.js";
 import { getHealth, startHealthPoller } from "./health.js";
 import { ask, resetSession } from "./orchestrator.js";
@@ -14,13 +15,15 @@ import { voiceRouter } from "./voice.js";
 
 const PORT = Number(process.env.PORT ?? 8787);
 // Default loopback-only. Set HOST=0.0.0.0 to accept LAN clients (e.g. the mobile app
-// on your wifi); the bearer token is then the only gate, so mind the network you're on.
+// on your wifi); auth is then the only gate, so mind the network you're on.
 const HOST = process.env.HOST ?? "127.0.0.1";
-const TOKEN = process.env.FLEET_TOKEN;
 const CONTROL = process.env.FLEET_CONTROL !== "off"; // set FLEET_CONTROL=off for a read-only surface
 
-if (!TOKEN || TOKEN.length < 24) {
-  console.error("Refusing to start: set FLEET_TOKEN to a random secret of at least 24 chars.");
+let authConfig: ReturnType<typeof loadAuthConfig>;
+try {
+  authConfig = loadAuthConfig(process.env);
+} catch (err) {
+  console.error(`Refusing to start: ${(err as Error).message}`);
   process.exit(1);
 }
 
@@ -141,13 +144,14 @@ app.use((req, res, next) => {
   next();
 });
 
+registerAuthRoutes(app, authConfig);
+
+const requireAuth = authMiddleware(authConfig);
 app.use((req, res, next) => {
-  // Static shells hold no secrets; they authenticate in-page.
+  // Static shells hold no secrets; they authenticate in-page. /auth/* is public by nature.
   const isStaticShell = req.method === "GET" && (req.path === "/voice" || req.path.startsWith("/app"));
-  if (req.path === "/healthz" || isStaticShell) return next();
-  const auth = req.headers.authorization ?? "";
-  if (auth !== `Bearer ${TOKEN}`) return res.status(401).json({ error: "unauthorized" });
-  next();
+  if (req.path === "/healthz" || isStaticShell || req.path.startsWith("/auth/")) return next();
+  return requireAuth(req, res, next);
 });
 
 // Expo web export (mobile/dist), when built: bun run --cwd mobile export:web
@@ -203,5 +207,7 @@ app.all("/mcp", async (req, res) => {
 startHealthPoller();
 
 app.listen(PORT, HOST, () => {
-  console.log(`walkie MCP on http://${HOST}:${PORT}/mcp (control lane: ${CONTROL ? "on" : "off"})`);
+  console.log(
+    `walkie MCP on http://${HOST}:${PORT}/mcp (auth: ${authConfig.mode}, control lane: ${CONTROL ? "on" : "off"})`,
+  );
 });

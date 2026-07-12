@@ -45,8 +45,8 @@ export default function App() {
 
   async function connect() {
     const base = serverUrl.trim().replace(/\/$/, "");
-    if (!base || !token.trim()) {
-      setStatus("Server URL and fleet token are required");
+    if (!base || (!token.trim() && Platform.OS !== "web")) {
+      setStatus("Server URL and token are required (on web, a session cookie also works)");
       return;
     }
     await AsyncStorage.setMany({ serverUrl: base, fleetToken: token.trim() });
