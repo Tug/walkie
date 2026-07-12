@@ -11,12 +11,27 @@
       "supportsTablet": false,
       "infoPlist": {
         "NSMicrophoneUsageDescription": "walkie needs the microphone to talk to your agent fleet.",
-        "UIBackgroundModes": ["audio", "voip"]
-      }
+        "UIBackgroundModes": [
+          "audio",
+          "voip"
+        ],
+        "ITSAppUsesNonExemptEncryption": false
+      },
+      "bitcode": false
     },
     "android": {
       "package": "com.tug.walkie",
-      "permissions": ["android.permission.RECORD_AUDIO", "android.permission.FOREGROUND_SERVICE"],
+      "permissions": [
+        "android.permission.RECORD_AUDIO",
+        "android.permission.FOREGROUND_SERVICE",
+        "android.permission.ACCESS_NETWORK_STATE",
+        "android.permission.CAMERA",
+        "android.permission.INTERNET",
+        "android.permission.MODIFY_AUDIO_SETTINGS",
+        "android.permission.SYSTEM_ALERT_WINDOW",
+        "android.permission.WAKE_LOCK",
+        "android.permission.BLUETOOTH"
+      ],
       "adaptiveIcon": {
         "backgroundColor": "#101418",
         "foregroundImage": "./assets/android-icon-foreground.png",
@@ -25,6 +40,15 @@
       },
       "predictiveBackGestureEnabled": false
     },
-    "plugins": ["expo-dev-client", "@config-plugins/react-native-webrtc"]
+    "plugins": [
+      "expo-dev-client",
+      "@config-plugins/react-native-webrtc"
+    ],
+    "owner": "tug",
+    "extra": {
+      "eas": {
+        "projectId": "d4ce14c0-057a-451d-8402-914141ba12f1"
+      }
+    }
   }
 }
