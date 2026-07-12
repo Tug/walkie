@@ -8,10 +8,9 @@ Three layers:
 
 1. **Fleet**: walkie's own native backend runs single-task Claude Agent SDK workers, each in
    its own git worktree, following the target repo's conventions and gated by a capability
-   guard (see [Fleet safety](#fleet-safety-native-backend)). No daemon, no autonomous
-   supervisor, no merge-queue: the walkie server is the only coordinator and acts only on your
-   explicit requests. (An earlier version wrapped [multiclaude](https://github.com/dlorenc/multiclaude);
-   it was dropped after it merged to main and pushed to teammates' branches on its own.)
+   guard (see [Fleet safety](#fleet-safety)). No daemon, no autonomous supervisor, no
+   merge-queue: the walkie server is the only coordinator and acts only on your explicit
+   requests.
 2. **Resident orchestrator**: a persistent Claude Agent SDK session on this machine that
    inspects the fleet (status, logs, PRs) under a strict command allowlist and answers in
    short, voice-friendly prose. Summarization happens here, so remote clients only ever
@@ -120,41 +119,39 @@ For a stable hostname use a named Cloudflare tunnel. Remote clients call
 - OpenAI Realtime (voice): session tool `{type: "mcp", server_url, authorization}`;
   put `spawn_worker`/`send_to_agent` behind `require_approval`.
 
-## Fleet safety (native backend)
+## Fleet safety
 
-The 2026 incident that shaped this was **unrequested autonomous action**: multiclaude's
-merge-queue agent (prompted to auto-merge) merged to main, and its supervisor (prompted to
-auto-dispatch) spawned workers nobody asked for. So walkie does **not** use multiclaude's
-`init` topology, no daemon, no supervisor, no merge-queue agent. The walkie server is the
-only coordinator and acts only on explicit `spawn_worker` requests.
+walkie is built for pointing agents at repos you care about, including shared ones, so its
+default is caution. Where [multiclaude](https://github.com/dlorenc/multiclaude) optimizes for
+autonomous velocity (a supervisor that finds work and dispatches agents, a merge-queue that
+merges green PRs on its own, workers in bypass-permissions mode), walkie inverts every one of
+those defaults:
 
-Each worker runs in its own git worktree off `origin/<base>` and **follows the repository's
-own conventions** (its `AGENTS.md`/`CLAUDE.md` is injected into the worker prompt), including
-branch naming and pre-commit/pre-push checks. Normal work is unrestricted, a worker may create
-and push feature branches and open PRs, which fits trunk-based development.
+| | multiclaude | walkie |
+|---|---|---|
+| **Who acts** | supervisor auto-dispatches workers | only you, via explicit `spawn_worker` |
+| **Merging** | merge-queue merges green PRs | never, unless you grant it per worker |
+| **Push to main** | allowed | off by default; per-worker grant |
+| **Force-push** | allowed | off by default; per-worker grant |
+| **Conventions** | its own prompts | the repo's own `AGENTS.md`/`CLAUDE.md` |
+| **Repos** | any you init | default-deny allowlist (`WALKIE_REPOS`) |
 
-The three irreversible / outward actions are **capabilities, off by default**, granted per
-worker only when the user explicitly asks, and enabling any of them requires the user's
+A worker does normal work freely, creating and pushing feature branches and opening PRs,
+which fits trunk-based development. The three irreversible actions are **capabilities, off by
+default**, granted per worker only when you explicitly ask; enabling any of them requires your
 verbatim consent phrase (`I give explicit consent to remove this`) passed to `spawn_worker`:
 
 - `allowMainPush` — push the base branch directly
 - `allowMerge` — `gh pr merge` / merge via API
 - `allowForcePush` — force-push
 
-The command guard (`src/gitguard.ts`) enforces these per-worker, and always blocks
-`--no-verify` (it would skip the repo's own checks) and remote retargeting. So "fix X and
-merge to main" works when you say so; an agent doing it unprompted cannot.
+The command guard (`src/gitguard.ts`) enforces these per worker and always blocks `--no-verify`
+(it would skip the repo's own checks) and remote retargeting. So "fix X and merge to main"
+works when you say so; an agent doing it unprompted cannot.
 
-Repos are **default-deny**: walkie refuses any repo not in `WALKIE_REPOS`. Example:
-
-```
-WALKIE_REPOS='[{"name":"my-toy","url":"git@github.com:me/my-toy.git","defaultBranch":"main"}]'
-```
-
-The guard is the primary enforcement (command-parsing, so strong but not cryptographic). For a
-*hard* guarantee on shared repos, run the fleet under a dedicated bot identity whose token
-cannot merge and can only push allowed refs, plus branch protection on the base branch. See
-DEPLOY.md.
+The guard is command-parsing, so strong but not cryptographic. For a *hard* guarantee on
+shared repos, additionally run the fleet under a bot identity whose token cannot merge and can
+only push allowed refs, plus branch protection on the base branch. See DEPLOY.md.
 
 ## Security model
 
