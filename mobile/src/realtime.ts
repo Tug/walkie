@@ -14,6 +14,10 @@ export interface SessionCallbacks {
 export interface VoiceSession {
   mute: (muted: boolean) => void;
   hangup: () => void;
+  /** Send typed text into the conversation (model replies in audio as usual). */
+  sendText: (text: string) => void;
+  /** Send an image (data URL). Keep under ~200KB: data channel message limit. */
+  sendImage: (dataUrl: string) => void;
 }
 
 export async function startVoiceSession(
@@ -135,8 +139,29 @@ export async function startVoiceSession(
       for (const track of mic.getAudioTracks()) track.enabled = !muted;
     },
     hangup: () => {
+      log("session_ended");
       for (const track of mic.getTracks()) track.stop();
       pc.close();
+    },
+    sendText: (text: string) => {
+      log("user_text", { text });
+      channel.send(
+        JSON.stringify({
+          type: "conversation.item.create",
+          item: { type: "message", role: "user", content: [{ type: "input_text", text }] },
+        }),
+      );
+      channel.send(JSON.stringify({ type: "response.create" }));
+    },
+    sendImage: (dataUrl: string) => {
+      log("user_image", { bytes: dataUrl.length });
+      channel.send(
+        JSON.stringify({
+          type: "conversation.item.create",
+          item: { type: "message", role: "user", content: [{ type: "input_image", image_url: dataUrl }] },
+        }),
+      );
+      channel.send(JSON.stringify({ type: "response.create" }));
     },
   };
 }

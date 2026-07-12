@@ -15,7 +15,8 @@
           "audio",
           "voip"
         ],
-        "ITSAppUsesNonExemptEncryption": false
+        "ITSAppUsesNonExemptEncryption": false,
+        "NSPhotoLibraryUsageDescription": "walkie lets you attach a photo to the conversation."
       },
       "bitcode": false
     },
@@ -42,7 +43,8 @@
     },
     "plugins": [
       "expo-dev-client",
-      "@config-plugins/react-native-webrtc"
+      "@config-plugins/react-native-webrtc",
+      "expo-image-picker"
     ],
     "owner": "tug",
     "extra": {

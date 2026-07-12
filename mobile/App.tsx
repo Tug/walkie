@@ -32,6 +32,7 @@ export default function App() {
   const [talking, setTalking] = useState(false);
   const [muted, setMuted] = useState(false);
   const [approval, setApproval] = useState<ApprovalRequest | null>(null);
+  const [draft, setDraft] = useState("");
   const session = useRef<VoiceSession | null>(null);
   const scroll = useRef<ScrollView>(null);
 
@@ -88,6 +89,34 @@ export default function App() {
     setMuted(next);
   }
 
+  function sendDraft() {
+    const text = draft.trim();
+    if (!text || !session.current) return;
+    session.current.sendText(text);
+    setTranscript((t) => `${t}You: ${text}\n\n`);
+    setDraft("");
+  }
+
+  async function attachImage() {
+    if (!session.current) return;
+    try {
+      // Dynamic import: the native module ships with the NEXT dev build; on a build
+      // that predates it we degrade to a status message instead of crashing.
+      const picker = await import("expo-image-picker");
+      const perm = await picker.requestMediaLibraryPermissionsAsync();
+      if (!perm.granted) return setStatus("Photo library permission denied");
+      const res = await picker.launchImageLibraryAsync({ base64: true, quality: 0.2 });
+      const asset = res.assets?.[0];
+      if (!asset?.base64) return;
+      const dataUrl = `data:${asset.mimeType ?? "image/jpeg"};base64,${asset.base64}`;
+      if (dataUrl.length > 200_000) return setStatus("Image too large for the session channel; pick a smaller one");
+      session.current.sendImage(dataUrl);
+      setTranscript((t) => `${t}You: [image]\n\n`);
+    } catch {
+      setStatus("Image attach needs the latest dev build (expo-image-picker)");
+    }
+  }
+
   return (
     <View style={styles.body}>
       <StatusBar style="light" />
@@ -123,7 +152,11 @@ export default function App() {
       )}
 
       {phase === "live" && (
-        <View style={styles.session}>
+        <KeyboardAvoidingView
+          behavior={Platform.OS === "ios" ? "padding" : undefined}
+          style={styles.session}
+          keyboardVerticalOffset={40}
+        >
           <View style={[styles.orb, talking ? styles.orbTalking : styles.orbLive]} />
           <View style={styles.row}>
             <Pressable style={[styles.button, styles.ghost]} onPress={toggleMute}>
@@ -142,7 +175,26 @@ export default function App() {
               {transcript}
             </Text>
           </ScrollView>
-        </View>
+          <View style={styles.composer}>
+            <Pressable style={[styles.button, styles.ghost, styles.attach]} onPress={attachImage}>
+              <Text style={styles.buttonText}>📎</Text>
+            </Pressable>
+            <TextInput
+              style={[styles.input, styles.composerInput]}
+              placeholder="Type instead (URLs, names, code…)"
+              placeholderTextColor="#5c6b78"
+              autoCapitalize="none"
+              autoCorrect={false}
+              value={draft}
+              onChangeText={setDraft}
+              onSubmitEditing={sendDraft}
+              returnKeyType="send"
+            />
+            <Pressable style={[styles.button, styles.primary]} onPress={sendDraft}>
+              <Text style={styles.buttonText}>Send</Text>
+            </Pressable>
+          </View>
+        </KeyboardAvoidingView>
       )}
 
       <Text style={styles.status}>{status}</Text>
@@ -205,6 +257,9 @@ const styles = StyleSheet.create({
   orbTalking: { backgroundColor: "#4f8fd3", transform: [{ scale: 1.1 }] },
   row: { flexDirection: "row", gap: 12, justifyContent: "center", marginBottom: 16 },
   transcript: { flex: 1, width: "100%" },
+  composer: { flexDirection: "row", gap: 8, width: "100%", alignItems: "center", paddingBottom: 8 },
+  composerInput: { flex: 1, marginBottom: 0 },
+  attach: { paddingHorizontal: 14 },
   transcriptText: { color: "#c9d4dc", fontSize: 15, lineHeight: 22 },
   status: { color: "#9fb0bd", fontSize: 13, paddingVertical: 16, minHeight: 40 },
   modalBackdrop: { flex: 1, backgroundColor: "rgba(0,0,0,0.7)", alignItems: "center", justifyContent: "center" },
