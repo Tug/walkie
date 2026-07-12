@@ -29,3 +29,19 @@ describe("commandAllowed", () => {
     expect(commandAllowed('tmux send-keys -t mc-r:a -l "fix the test; then rerun"')).toBe(true);
   });
 });
+
+import { homedir } from "node:os";
+import { writeAllowed } from "../src/orchestrator.js";
+
+describe("writeAllowed", () => {
+  test("allows journal and tasks in the state dir", () => {
+    expect(writeAllowed(`${homedir()}/.fleet-orchestrator/journal.md`)).toBe(true);
+    expect(writeAllowed(`${homedir()}/.fleet-orchestrator/tasks.md`)).toBe(true);
+  });
+  test("denies everything else", () => {
+    expect(writeAllowed(`${homedir()}/.zshrc`)).toBe(false);
+    expect(writeAllowed("/etc/hosts")).toBe(false);
+    expect(writeAllowed(`${homedir()}/.fleet-orchestrator/../.ssh/config`)).toBe(false);
+    expect(writeAllowed(`${homedir()}/Work/walkie/src/server.ts`)).toBe(false);
+  });
+});

@@ -138,7 +138,9 @@ export default function App() {
             style={styles.transcript}
             onContentSizeChange={() => scroll.current?.scrollToEnd({ animated: true })}
           >
-            <Text style={styles.transcriptText}>{transcript}</Text>
+            <Text style={styles.transcriptText} selectable>
+              {transcript}
+            </Text>
           </ScrollView>
         </View>
       )}

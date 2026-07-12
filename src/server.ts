@@ -1,4 +1,7 @@
 import { randomUUID } from "node:crypto";
+import { appendFile, mkdir } from "node:fs/promises";
+import { homedir } from "node:os";
+import { join } from "node:path";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import express from "express";
@@ -136,6 +139,24 @@ app.use((req, res, next) => {
 
 app.get("/healthz", (_req, res) => res.json({ ok: true }));
 app.use(voiceRouter);
+
+// Voice clients POST conversation events here (JSONL on disk) so sessions can be
+// replayed and troubleshooted later, e.g. from a Claude Code session on this machine.
+const LOG_DIR = join(homedir(), ".fleet-orchestrator", "voice-logs");
+app.post("/voice/log", async (req, res) => {
+  const { session, events } = req.body ?? {};
+  if (typeof session !== "string" || !Array.isArray(events)) {
+    return res.status(400).json({ error: "expected {session, events[]}" });
+  }
+  await mkdir(LOG_DIR, { recursive: true });
+  const day = new Date().toISOString().slice(0, 10);
+  const lines = events
+    .slice(0, 100)
+    .map((e) => JSON.stringify({ at: new Date().toISOString(), session, ...e }))
+    .join("\n");
+  await appendFile(join(LOG_DIR, `${day}.jsonl`), `${lines}\n`);
+  res.json({ ok: true });
+});
 
 // Stateful streamable HTTP MCP: one transport per MCP session.
 const transports = new Map<string, StreamableHTTPServerTransport>();

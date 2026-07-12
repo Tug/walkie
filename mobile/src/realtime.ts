@@ -23,6 +23,16 @@ export async function startVoiceSession(
   tools: McpTool[],
   cb: SessionCallbacks,
 ): Promise<VoiceSession> {
+  const logSession = `mobile-${Date.now().toString(36)}`;
+  const log = (type: string, data: object = {}) => {
+    fetch(`${serverUrl}/voice/log`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ session: logSession, events: [{ type, ...data }] }),
+    }).catch(() => {});
+  };
+  let turnText = "";
+
   cb.onStatus("Minting session key…");
   const sec = await fetch(`${serverUrl}/voice/secret`, {
     method: "POST",
@@ -70,10 +80,18 @@ export async function startVoiceSession(
   channel.addEventListener("message", async (e: any) => {
     const ev = JSON.parse(e.data);
     if (ev.type === "response.output_audio_transcript.delta" || ev.type === "response.audio_transcript.delta") {
+      turnText += ev.delta;
       cb.onTranscriptDelta(ev.delta);
     }
-    if (ev.type === "response.done") cb.onTurnDone();
-    if (ev.type === "error") cb.onStatus(`Realtime error: ${ev.error?.message || "unknown"}`);
+    if (ev.type === "response.done") {
+      if (turnText) log("assistant_turn", { text: turnText });
+      turnText = "";
+      cb.onTurnDone();
+    }
+    if (ev.type === "error") {
+      log("realtime_error", { error: ev.error });
+      cb.onStatus(`Realtime error: ${ev.error?.message || "unknown"}`);
+    }
     if (ev.type === "response.output_item.done" && ev.item?.type === "function_call") {
       const { name, call_id } = ev.item;
       let args: object = {};
@@ -81,6 +99,7 @@ export async function startVoiceSession(
         args = JSON.parse(ev.item.arguments || "{}");
       } catch {}
       cb.onStatus(`Tool: ${name}…`);
+      log("tool_call", { name, args });
       let output: string;
       if (CONTROL_TOOLS.has(name) && !(await cb.onApproval(name, args))) {
         output = "The user denied this action.";
@@ -91,6 +110,7 @@ export async function startVoiceSession(
           output = `Tool failed: ${err.message}`;
         }
       }
+      log("tool_result", { name, output: output.slice(0, 2000) });
       channel.send(
         JSON.stringify({ type: "conversation.item.create", item: { type: "function_call_output", call_id, output } }),
       );
@@ -108,6 +128,7 @@ export async function startVoiceSession(
   });
   if (!sdp.ok) throw new Error(`Realtime SDP exchange failed: ${sdp.status}`);
   await pc.setRemoteDescription({ type: "answer", sdp: await sdp.text() });
+  log("session_started", { model, tools: tools.map((t) => t.name) });
 
   return {
     mute: (muted: boolean) => {

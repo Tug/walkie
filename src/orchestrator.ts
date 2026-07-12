@@ -5,6 +5,9 @@ import { query } from "@anthropic-ai/claude-agent-sdk";
 
 const STATE_DIR = join(homedir(), ".fleet-orchestrator");
 const SESSION_FILE = join(STATE_DIR, "session.json");
+// Optional private brief (user/work-specific context) appended to the system prompt.
+// Lives outside the repo on purpose; edit it freely, it is re-read on every question.
+const BRIEF_FILE = process.env.WALKIE_BRIEF ?? join(STATE_DIR, "CLAUDE.md");
 
 const SYSTEM_PROMPT = `You are the resident orchestrator of a personal multi-agent fleet running on this machine via multiclaude (tmux + git worktrees, one Claude Code instance per agent, PRs gated by CI).
 
@@ -12,7 +15,7 @@ Your job when asked a question:
 - Inspect the fleet yourself: \`multiclaude status\`, \`multiclaude history <repo>\`, \`tmux capture-pane -p -t mc-<repo>:<agent> -S -200\`, \`gh pr list\`, and ~/.multiclaude/state.json.
 - Answer as a chief of staff: short, factual, decision-oriented. Lead with what matters (blocked agents, failing CI, PRs awaiting approval), not raw logs.
 - You may steer agents when explicitly asked: spawn workers (\`multiclaude worker create "task" --repo <repo>\`), or send a message into an agent's tmux window (tmux send-keys the literal text with -l, then Enter, as two separate calls).
-- You operate under a command allowlist: only fleet inspection and steering commands are permitted. Do not attempt anything else (no merges, no pushes, no file edits, no deletions).
+- You operate under a command allowlist: only fleet inspection and steering commands are permitted. Do not attempt anything else (no merges, no pushes, no deletions). File writes are permitted only inside ~/.fleet-orchestrator/ (your journal and task notes).
 - Your answers may be read aloud by a voice interface: prefer 2-5 sentences of plain prose, no markdown tables, no code blocks unless asked. Never use em dashes; use commas, colons, or separate sentences.`;
 
 // Only these command shapes may run. Everything else is denied.
@@ -35,6 +38,12 @@ export function commandAllowed(cmd: string): boolean {
   return ALLOWED_COMMANDS.some((re) => re.test(trimmed));
 }
 
+/** File writes are allowed only inside the orchestrator's own state dir (journal, tasks). */
+export function writeAllowed(filePath: string): boolean {
+  const dir = join(homedir(), ".fleet-orchestrator");
+  return filePath.startsWith(`${dir}/`) && !filePath.includes("..");
+}
+
 let sessionId: string | undefined;
 let queue: Promise<unknown> = Promise.resolve();
 
@@ -53,20 +62,36 @@ async function saveSession(): Promise<void> {
 
 async function runQuery(question: string): Promise<string> {
   await loadSession();
+  let brief = "";
+  try {
+    brief = await readFile(BRIEF_FILE, "utf8");
+  } catch {
+    // no brief file: fine
+  }
   let answer = "";
   const q = query({
     prompt: question,
     options: {
-      systemPrompt: { type: "preset", preset: "claude_code", append: SYSTEM_PROMPT },
+      systemPrompt: {
+        type: "preset",
+        preset: "claude_code",
+        append: brief ? `${SYSTEM_PROMPT}\n\n# Private brief\n\n${brief}` : SYSTEM_PROMPT,
+      },
       resume: sessionId,
       cwd: join(homedir(), ".multiclaude"),
-      allowedTools: ["Bash", "Read", "Grep", "Glob"],
+      allowedTools: ["Bash", "Read", "Grep", "Glob", "Write", "Edit"],
       canUseTool: async (toolName, input) => {
         if (toolName === "Bash") {
           const cmd = String((input as { command?: string }).command ?? "");
           return commandAllowed(cmd)
             ? { behavior: "allow", updatedInput: input }
             : { behavior: "deny", message: `Command not in fleet allowlist: ${cmd}` };
+        }
+        if (toolName === "Write" || toolName === "Edit") {
+          const file = String((input as { file_path?: string }).file_path ?? "");
+          return writeAllowed(file)
+            ? { behavior: "allow", updatedInput: input }
+            : { behavior: "deny", message: `Writes are only allowed under ~/.fleet-orchestrator/: ${file}` };
         }
         // Read/Grep/Glob are read-only: allow.
         return { behavior: "allow", updatedInput: input };
