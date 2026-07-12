@@ -6,7 +6,7 @@
   "scripts": {
     "start": "bun --env-file=.env src/server.ts",
     "typecheck": "tsc",
-    "lint": "biome check .",
+    "lint": "biome ci .",
     "lint:fix": "biome check --write .",
     "test": "bun test",
     "dev": "bun --env-file=.env --watch src/server.ts"

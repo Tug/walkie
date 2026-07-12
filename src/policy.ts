@@ -18,7 +18,10 @@ let cache: RepoPolicy[] | null = null;
 export function loadRepoPolicies(env: NodeJS.ProcessEnv = process.env): RepoPolicy[] {
   if (cache) return cache;
   const raw = env.WALKIE_REPOS;
-  if (!raw) return (cache = []);
+  if (!raw) {
+    cache = [];
+    return cache;
+  }
   let parsed: unknown;
   try {
     parsed = JSON.parse(raw);
