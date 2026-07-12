@@ -26,6 +26,9 @@ export async function startVoiceSession(
   mcp: McpClient,
   tools: McpTool[],
   cb: SessionCallbacks,
+  // Pass a pre-acquired mic stream when the platform requires getUserMedia to run
+  // directly inside the user gesture (iOS Safari): acquire it first, connect after.
+  preacquiredMic?: any,
 ): Promise<VoiceSession> {
   const logSession = `mobile-${Date.now().toString(36)}`;
   const log = (type: string, data: object = {}) => {
@@ -49,7 +52,7 @@ export async function startVoiceSession(
   const { value: ephemeral, model } = await sec.json();
 
   cb.onStatus("Opening microphone…");
-  const mic = await getMicStream();
+  const mic = preacquiredMic ?? (await getMicStream());
 
   const pc = createPeerConnection();
   for (const track of mic.getTracks()) pc.addTrack(track, mic);

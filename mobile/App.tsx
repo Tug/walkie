@@ -14,6 +14,7 @@ import {
 } from "react-native";
 import { McpClient } from "./src/mcp";
 import { startVoiceSession, type VoiceSession } from "./src/realtime";
+import { getMicStream } from "./src/rtc";
 
 type Phase = "setup" | "connecting" | "live";
 
@@ -65,7 +66,12 @@ export default function App() {
     }
     await AsyncStorage.setMany({ serverUrl: base, fleetToken: token.trim() });
     setPhase("connecting");
+    let mic: unknown;
     try {
+      // Mic first, inside the tap gesture: iOS Safari refuses getUserMedia once
+      // network awaits have consumed the user-activation window.
+      setStatus("Requesting microphone…");
+      mic = await getMicStream();
       setStatus("Loading fleet tools…");
       const mcp = new McpClient(base, token.trim());
       const tools = await mcp.init();
@@ -80,9 +86,10 @@ export default function App() {
           setTranscript((t) => `${t}\n\n`);
         },
         onApproval: (name, args) => new Promise((resolve) => setApproval({ name, args, resolve })),
-      });
+      }, mic);
       setPhase("live");
     } catch (err: any) {
+      (mic as { getTracks?: () => { stop: () => void }[] })?.getTracks?.().forEach((t) => t.stop());
       setStatus(`Error: ${err.message}`);
       setPhase("setup");
     }
