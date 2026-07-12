@@ -9,6 +9,9 @@ import { ask, resetSession } from "./orchestrator.js";
 import { voiceRouter } from "./voice.js";
 
 const PORT = Number(process.env.PORT ?? 8787);
+// Default loopback-only. Set HOST=0.0.0.0 to accept LAN clients (e.g. the mobile app
+// on your wifi); the bearer token is then the only gate, so mind the network you're on.
+const HOST = process.env.HOST ?? "127.0.0.1";
 const TOKEN = process.env.FLEET_TOKEN;
 const CONTROL = process.env.FLEET_CONTROL !== "off"; // set FLEET_CONTROL=off for a read-only surface
 
@@ -161,6 +164,6 @@ app.all("/mcp", async (req, res) => {
 
 startHealthPoller();
 
-app.listen(PORT, "127.0.0.1", () => {
-  console.log(`walkie MCP on http://127.0.0.1:${PORT}/mcp (control lane: ${CONTROL ? "on" : "off"})`);
+app.listen(PORT, HOST, () => {
+  console.log(`walkie MCP on http://${HOST}:${PORT}/mcp (control lane: ${CONTROL ? "on" : "off"})`);
 });
