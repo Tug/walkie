@@ -8,14 +8,13 @@ import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/
 import express from "express";
 import { z } from "zod";
 import { authMiddleware, loadAuthConfig, registerAuthRoutes } from "./auth.js";
-import { agentOutput, fleetStatus, sendToAgent, taskHistory } from "./fleet.js";
 import {
-  killNativeWorker,
-  listNativeWorkers,
-  nativeWorkerOutput,
-  spawnNativeWorker,
-} from "./fleet-native.js";
-import { getHealth, startHealthPoller } from "./health.js";
+  cliWorkerOutput,
+  killCliWorker,
+  listCliWorkers,
+  messageCliWorker,
+  spawnCliWorker,
+} from "./fleet-cli.js";
 import { ask, resetSession } from "./orchestrator.js";
 import { repoPolicy } from "./policy.js";
 import { CONSENT_PROMPT_EN, consentValid } from "./risk.js";
@@ -43,25 +42,14 @@ function buildServer(): McpServer {
     {
       title: "Fleet status",
       description:
-        "Snapshot of the local agent fleet: daemon state, repos, and each agent with live health " +
-        "(working / idle / blocked+reason / dead, with since timestamps). Cheap and deterministic.",
+        "Snapshot of the fleet: each worker with its repo, branch, task, tmux session and live " +
+        "status (working / idle / blocked:trust / ended). Cheap and deterministic.",
       inputSchema: {},
     },
     async () => {
-      const status = await fleetStatus();
-      const enriched = {
-        ...status,
-        repos: status.repos.map((r) => ({
-          ...r,
-          agents: r.agents.map((a) => ({
-            ...a,
-            health: getHealth(`${r.tmux_session ?? `mc-${r.name}`}:${a.tmux_window ?? a.name}`),
-          })),
-        })),
-        // walkie-native confined workers (the go-forward backend).
-        workers: await listNativeWorkers(),
+      return {
+        content: [{ type: "text", text: JSON.stringify({ workers: await listCliWorkers() }, null, 2) }],
       };
-      return { content: [{ type: "text", text: JSON.stringify(enriched, null, 2) }] };
     },
   );
 
@@ -70,30 +58,25 @@ function buildServer(): McpServer {
     {
       title: "Agent output",
       description:
-        "Recent activity log for a worker. Prefer ask_orchestrator for summaries. For a native " +
-        "worker pass its name; the repo arg is optional and only used for legacy tmux agents.",
+        "Recent terminal output of a worker (tmux capture). Prefer ask_orchestrator for summaries.",
       inputSchema: {
         agent: z.string().describe("Worker name as shown in fleet_status"),
-        repo: z.string().optional().describe("Only for legacy tmux agents"),
         lines: z.number().int().min(10).max(2000).default(100),
       },
     },
-    async ({ repo, agent, lines }) => {
-      const native = await nativeWorkerOutput(agent, lines);
-      if (!native.startsWith("No log for worker")) return { content: [{ type: "text", text: native }] };
-      if (repo) return { content: [{ type: "text", text: await agentOutput(repo, agent, lines) }] };
-      return { content: [{ type: "text", text: native }] };
-    },
+    async ({ agent, lines }) => ({ content: [{ type: "text", text: await cliWorkerOutput(agent, lines) }] }),
   );
 
   server.registerTool(
     "task_history",
     {
       title: "Task history",
-      description: "Completed and past worker tasks for a repo.",
-      inputSchema: { repo: z.string() },
+      description: "Past and current workers for a repo (or all repos if omitted).",
+      inputSchema: { repo: z.string().optional() },
     },
-    async ({ repo }) => ({ content: [{ type: "text", text: await taskHistory(repo) }] }),
+    async ({ repo }) => ({
+      content: [{ type: "text", text: JSON.stringify(await listCliWorkers(repo), null, 2) }],
+    }),
   );
 
   server.registerTool(
@@ -147,13 +130,17 @@ function buildServer(): McpServer {
           };
         }
         const grant = wantsElevated ? { allowMainPush, allowMerge, allowForcePush } : {};
-        const r = await spawnNativeWorker(pol.policy, task, grant);
+        const r = await spawnCliWorker(pol.policy, task, grant);
         const scope = wantsElevated
           ? `authorized to ${[allowMainPush && "push main", allowMerge && "merge", allowForcePush && "force-push"].filter(Boolean).join(", ")}`
           : "PR-only (no merge/main-push/force-push)";
+        const join = `join locally with: tmux attach -t ${r.tmuxSession}${r.remoteControl ? `; remote-control session "${r.name}" is live on claude.ai/code` : ""}`;
         return {
           content: [
-            { type: "text", text: `Spawned worker ${r.name} on ${repo} (branch ${r.branch}), ${scope}.` },
+            {
+              type: "text",
+              text: `Spawned worker ${r.name} on ${repo} (branch ${r.branch}), ${scope}. ${join}.`,
+            },
           ],
         };
       },
@@ -162,12 +149,13 @@ function buildServer(): McpServer {
     server.registerTool(
       "send_to_agent",
       {
-        title: "Message an agent",
-        description: "Type a message into a running agent's session (tmux). Use for steering or unblocking.",
-        inputSchema: { repo: z.string(), agent: z.string(), text: z.string() },
+        title: "Message a worker",
+        description:
+          "Type a message into a running worker's live session (tmux). Use for steering or unblocking.",
+        inputSchema: { agent: z.string(), text: z.string() },
       },
-      async ({ repo, agent, text }) => ({
-        content: [{ type: "text", text: await sendToAgent(repo, agent, text) }],
+      async ({ agent, text }) => ({
+        content: [{ type: "text", text: await messageCliWorker(agent, text) }],
       }),
     );
 
@@ -211,7 +199,7 @@ function buildServer(): McpServer {
             ],
           };
         }
-        return { content: [{ type: "text", text: await killNativeWorker(agent) }] };
+        return { content: [{ type: "text", text: await killCliWorker(agent) }] };
       },
     );
   }
@@ -292,8 +280,6 @@ app.all("/mcp", async (req, res) => {
 
   await transport.handleRequest(req, res, req.body);
 });
-
-startHealthPoller();
 
 app.listen(PORT, HOST, () => {
   console.log(

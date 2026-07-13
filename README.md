@@ -36,22 +36,26 @@ Env:
 
 ## Tools
 
-Read lane (deterministic): `fleet_status` (includes worker status), `agent_output`
-(a worker's activity log), `task_history`.
+Read lane (deterministic): `fleet_status` (each worker's status), `agent_output`
+(a worker's live terminal), `task_history`.
 Brain: `ask_orchestrator` (preferred for open questions; summaries happen Mac-side).
-Control lane: `spawn_worker`, `reset_orchestrator`.
+Control lane: `spawn_worker`, `send_to_agent` (message a running worker), `reset_orchestrator`.
 
-## Worker status
+## Worker runtime
 
-Each native worker reports its lifecycle into `fleet_status`, sourced from the Agent SDK run
-(not terminal scraping): `starting` → `working` → `done` / `error`, or `killed`. Each carries
-`createdAt` / `updatedAt` and a short `summary` on completion, so a voice answer can say
-"one worker done, one still working" without any LLM reading terminals.
+Each worker is an interactive `claude` session in its own **tmux session** (`walkie-<name>`)
+and git worktree. Consequences:
 
-> Legacy: a tmux pane-hash health poller and the gastown-derived `send_to_agent` tmux delivery
-> remain in the tree from the multiclaude era. They do not apply to native workers (which are
-> not tmux sessions) and are slated for removal or replacement by a native "message a running
-> worker" path.
+- **Runs on your claude.ai subscription**, not API credits (the interactive CLI uses your
+  login; the Agent SDK would be API-key-only).
+- **Joinable locally**: `tmux attach -t walkie-<name>` to watch or take over.
+- **Remote-controllable**: set `WALKIE_REMOTE_CONTROL=on` and each worker launches with
+  `--remote-control`, so you can steer it from the Claude mobile app / claude.ai/code.
+- `fleet_status` reports each worker's live status (`working` / `idle` / `blocked:trust` /
+  `ended`) from its tmux pane; `send_to_agent` types into the live session.
+
+The worker runs under `--permission-mode dontAsk` (never bypass) with a **PreToolUse hook**
+(`src/hook.ts`) as the sole gate, so it works unattended without stalling on prompts.
 
 ## Voice client
 
@@ -125,7 +129,8 @@ walkie is built for pointing agents at repos you care about, including shared on
 default is caution. Where [multiclaude](https://github.com/dlorenc/multiclaude) optimizes for
 autonomous velocity (a supervisor that finds work and dispatches agents, a merge-queue that
 merges green PRs on its own, workers in bypass-permissions mode), walkie inverts every one of
-those defaults:
+those defaults. Its workers run `--permission-mode dontAsk` (never bypass) and are gated by a
+PreToolUse hook rather than trusting the agent:
 
 | | multiclaude | walkie |
 |---|---|---|
@@ -145,9 +150,10 @@ verbatim consent phrase (`I give explicit consent to remove this`) passed to `sp
 - `allowMerge` — `gh pr merge` / merge via API
 - `allowForcePush` — force-push
 
-The command guard (`src/gitguard.ts`) enforces these per worker and always blocks `--no-verify`
-(it would skip the repo's own checks) and remote retargeting. So "fix X and merge to main"
-works when you say so; an agent doing it unprompted cannot.
+The guard (`src/gitguard.ts`, applied via the PreToolUse hook `src/hook.ts`) enforces these per
+worker and always blocks `--no-verify` (it would skip the repo's own checks) and remote
+retargeting. So "fix X and merge to main" works when you say so; an agent doing it unprompted
+cannot.
 
 The guard is command-parsing, so strong but not cryptographic. For a *hard* guarantee on
 shared repos, additionally run the fleet under a bot identity whose token cannot merge and can

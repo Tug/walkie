@@ -9,25 +9,20 @@ const SESSION_FILE = join(STATE_DIR, "session.json");
 // Lives outside the repo on purpose; edit it freely, it is re-read on every question.
 const BRIEF_FILE = process.env.WALKIE_BRIEF ?? join(STATE_DIR, "CLAUDE.md");
 
-const SYSTEM_PROMPT = `You are the resident orchestrator of a personal multi-agent fleet running on this machine via multiclaude (tmux + git worktrees, one Claude Code instance per agent, PRs gated by CI).
+const SYSTEM_PROMPT = `You are the resident orchestrator of a personal multi-agent fleet on this machine. Workers are interactive Claude Code sessions, each in its own tmux session named \`walkie-<name>\` and its own git worktree.
 
 Your job when asked a question:
-- Inspect the fleet yourself: \`multiclaude status\`, \`multiclaude history <repo>\`, \`tmux capture-pane -p -t mc-<repo>:<agent> -S -200\`, \`gh pr list\`, and ~/.multiclaude/state.json.
-- Answer as a chief of staff: short, factual, decision-oriented. Lead with what matters (blocked agents, failing CI, PRs awaiting approval), not raw logs.
-- You may steer agents when explicitly asked: spawn workers (\`multiclaude worker create "task" --repo <repo>\`), or send a message into an agent's tmux window (tmux send-keys the literal text with -l, then Enter, as two separate calls).
-- You operate under a command allowlist: only fleet inspection and steering commands are permitted. Do not attempt anything else (no merges, no pushes, no deletions). File writes are permitted only inside ~/.fleet-orchestrator/ (your journal and task notes).
+- Inspect the fleet yourself: read ~/.fleet-orchestrator/cli/fleet.json (the worker registry: repo, branch, task, tmux session), \`tmux list-sessions\`, \`tmux capture-pane -p -t walkie-<name>:0 -S -200\` for a worker's live output, and \`gh pr list\` / \`gh run list\` for PR and CI state.
+- Answer as a chief of staff: short, factual, decision-oriented. Lead with what matters (a worker stuck or ended, failing CI, PRs awaiting review), not raw logs.
+- You operate under a command allowlist: fleet inspection only. You do NOT spawn, steer, merge, push, or delete (the user drives those through walkie's tools). File writes are permitted only inside ~/.fleet-orchestrator/ (your journal and task notes).
 - Your answers may be read aloud by a voice interface: prefer 2-5 sentences of plain prose, no markdown tables, no code blocks unless asked. Never use em dashes; use commas, colons, or separate sentences.`;
 
 // Only these command shapes may run. Everything else is denied.
 const ALLOWED_COMMANDS: RegExp[] = [
-  /^multiclaude (status|list|history|logs|diagnostics)\b/,
-  /^multiclaude (agents|worker|work) list\b/,
-  /^multiclaude worker create /,
-  /^multiclaude (agent|message) (list-messages|read-message|list|read)\b/,
   /^tmux (list-sessions|list-windows|capture-pane)\b/,
-  /^tmux send-keys /,
   /^gh pr (list|view|checks|status)\b/,
   /^gh run (list|view)\b/,
+  /^git (log|status|diff|show|branch)\b/,
   /^(cat|head|tail|ls|grep|jq) /,
 ];
 
@@ -78,7 +73,7 @@ async function runQuery(question: string): Promise<string> {
         append: brief ? `${SYSTEM_PROMPT}\n\n# Private brief\n\n${brief}` : SYSTEM_PROMPT,
       },
       resume: sessionId,
-      cwd: join(homedir(), ".multiclaude"),
+      cwd: join(homedir(), ".fleet-orchestrator"),
       // NOTE: no allowedTools here. Bare allowedTools entries auto-approve the whole
       // tool BEFORE canUseTool is consulted (CLAUDE_SDK_CAN_USE_TOOL_SHADOWED), which
       // would bypass the gates below. Every tool call must fall through to canUseTool.
