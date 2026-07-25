@@ -9,6 +9,7 @@ import express from "express";
 import { z } from "zod";
 import { AGENT_KINDS, isAgentKind } from "./agents.js";
 import { authMiddleware, loadAuthConfig, registerAuthRoutes } from "./auth.js";
+import { convertSession, listRecentSessions } from "./convert/index.js";
 import {
   cliWorkerOutput,
   getCliWorker,
@@ -111,6 +112,51 @@ function buildServer(): McpServer {
     async ({ task, repo }) => {
       const s = suggestAgent(task, await recentRuns(repo, 40));
       return { content: [{ type: "text", text: JSON.stringify(s, null, 2) }] };
+    },
+  );
+
+  server.registerTool(
+    "list_sessions",
+    {
+      title: "List recent agent sessions",
+      description:
+        "Recent Claude and Codex CLI sessions on this machine (provider, id, title, cwd, path), newest " +
+        "first, so you can pick one to continue in a different agent via convert_session.",
+      inputSchema: { limit: z.number().int().min(1).max(50).default(20) },
+    },
+    async ({ limit }) => ({
+      content: [{ type: "text", text: JSON.stringify(await listRecentSessions(limit), null, 2) }],
+    }),
+  );
+
+  server.registerTool(
+    "convert_session",
+    {
+      title: "Convert a session for another agent",
+      description:
+        "Read a Claude or Codex session (by session id or .jsonl path) and produce a portable handoff " +
+        "transcript for a target agent (claude/codex/opencode), with tool calls translated to the " +
+        "target's vocabulary. Writes a markdown file and returns its path; continue the target from it. " +
+        "(Native auto-resume file writing is a separate, live-validated step.)",
+      inputSchema: {
+        session: z.string().describe("Source session id or .jsonl path (from list_sessions)"),
+        target: z.enum(["claude", "codex", "opencode"]),
+      },
+    },
+    async ({ session, target }) => {
+      try {
+        const r = await convertSession(session, target);
+        return {
+          content: [
+            {
+              type: "text",
+              text: `Converted ${r.provider} "${r.title}" (${r.events} events) → ${target}. Handoff written to ${r.path}`,
+            },
+          ],
+        };
+      } catch (err) {
+        return { isError: true, content: [{ type: "text", text: (err as Error).message }] };
+      }
     },
   );
 

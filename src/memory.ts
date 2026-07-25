@@ -2,6 +2,7 @@
 // approach works for a given repo, and a human (or the router) can search it. Records live at
 // $WALKIE_MEMORY_DIR/<repo>/runs/<id>.json (default ~/.fleet-orchestrator/memory).
 
+import { randomUUID } from "node:crypto";
 import { mkdir, readdir, readFile, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
@@ -39,7 +40,7 @@ function slug(s: string): string {
 export async function recordRun(
   rec: Omit<RunRecord, "id" | "ts"> & Partial<Pick<RunRecord, "id" | "ts">>,
 ): Promise<RunRecord> {
-  const id = rec.id ?? `${Date.now().toString(36)}-${Math.round(performance.now()).toString(36)}`;
+  const id = rec.id ?? `${Date.now().toString(36)}-${randomUUID().slice(0, 8)}`;
   const full: RunRecord = { ...rec, id, ts: rec.ts ?? new Date().toISOString() };
   const dir = join(memDir(), slug(full.repo), "runs");
   await mkdir(dir, { recursive: true });

@@ -13,7 +13,7 @@ beforeAll(async () => {
   searchMemory = m.searchMemory;
 });
 afterAll(() => {
-  process.env.WALKIE_MEMORY_DIR = undefined;
+  delete process.env.WALKIE_MEMORY_DIR;
 });
 
 describe("project memory", () => {

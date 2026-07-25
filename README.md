@@ -43,6 +43,18 @@ Brain: `ask_orchestrator` (preferred for open questions; summaries happen Mac-si
 Control lane: `spawn_worker`, `send_to_agent` (message a running worker), `record_run`
 (save a retrospective to memory), `reset_orchestrator`.
 
+### Session conversion (continuo port)
+
+`list_sessions` lists recent Claude and Codex CLI sessions on this machine; `convert_session`
+reads one (by id or path) and writes a portable handoff transcript for a target agent
+(claude/codex/opencode) with tool calls translated to the target's vocabulary (Claude `Bash` ⇄
+Codex `exec`/`exec_command` ⇄ opencode `bash`, etc.). Reimplemented in TS from
+[continuo](https://github.com/yoavf/continuo) (Swift): per-provider adapters → a canonical
+session model → a tool taxonomy → renderer. Provider-private reasoning is dropped (not
+portable). Writing a *native auto-resume* file for the target is a separate, live-validated
+step; today it emits a markdown handoff to continue from. opencode read/write is pending (its
+on-disk layout is version-unstable; the plan is its `export`/`import` commands).
+
 ### Project memory & routing
 
 Each run can be recorded to `~/.fleet-orchestrator/memory/<repo>/runs/*.json` via `record_run`
