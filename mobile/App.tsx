@@ -1,4 +1,5 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
+import Constants from "expo-constants";
 import { StatusBar } from "expo-status-bar";
 import { useEffect, useRef, useState } from "react";
 import {
@@ -15,6 +16,10 @@ import {
 import { McpClient } from "./src/mcp";
 import { startVoiceSession, type VoiceSession } from "./src/realtime";
 import { getMicStream } from "./src/rtc";
+
+// Default server URL baked in via app config (extra.walkieServerUrl), e.g. the Tailscale
+// Funnel hostname, so the app connects over cellular with no typing.
+const DEFAULT_SERVER_URL = (Constants.expoConfig?.extra as { walkieServerUrl?: string } | undefined)?.walkieServerUrl ?? "";
 
 type Phase = "setup" | "connecting" | "live";
 
@@ -45,11 +50,13 @@ export default function App() {
       // On web the app is served by the walkie server itself: default to that origin
       // and detect an existing cookie session (AUTH_MODE=google).
       const origin = Platform.OS === "web" ? ((globalThis as any).location?.origin ?? "") : "";
-      const base = vals.serverUrl || origin;
+      const base = vals.serverUrl || origin || DEFAULT_SERVER_URL;
       if (base) setServerUrl(base);
-      if (origin) {
+      // Detect an existing cookie session (AUTH_MODE=google) against the resolved base.
+      const probe = origin || DEFAULT_SERVER_URL;
+      if (probe) {
         try {
-          const me = await fetch(`${origin}/auth/me`);
+          const me = await fetch(`${probe}/auth/me`);
           if (me.ok) setSessionEmail(((await me.json()) as { email?: string }).email ?? null);
         } catch {
           // no session: manual token entry

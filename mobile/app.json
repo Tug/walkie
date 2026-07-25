@@ -2,7 +2,7 @@
   "expo": {
     "name": "walkie",
     "slug": "walkie",
-    "version": "0.1.0",
+    "version": "0.2.0",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "dark",
@@ -50,7 +50,8 @@
     "extra": {
       "eas": {
         "projectId": "d4ce14c0-057a-451d-8402-914141ba12f1"
-      }
+      },
+      "walkieServerUrl": "https://macbook-pro-178.taild03d67.ts.net"
     },
     "web": {
       "output": "single",
