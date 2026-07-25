@@ -90,11 +90,21 @@ bunx eas device:create                           # register your iPhone (ad hoc)
 bunx eas build --profile internal --platform ios # then install from the build link
 ```
 
-Internal distribution installs straight from a link on registered devices, no TestFlight.
-Requires an Apple Developer Program membership for the certificates. Point the app at the
-walkie server URL (LAN IP or tunnel hostname) plus the fleet token; both persist on-device.
-If iOS ever suspends the session mid-pocket, the planned hardening is CallKit via
-react-native-callkeep so walkie sessions present as real calls.
+Two build profiles (`mobile/eas.json`):
+
+- `development` — dev client + Metro, for iterating (needs your Mac on the same network).
+- `internal` — **standalone release build**: JS bundled, no Metro, no local network. Installs
+  from a link on registered devices, no TestFlight. This is the one to use day-to-day.
+
+```bash
+bunx eas build --profile internal --platform ios   # then open the build link on the iPhone
+```
+
+Requires an Apple Developer Program membership for the certificates. The default server URL is
+baked in from `app.json` → `extra.walkieServerUrl` (see below), so the app connects with no
+typing; in `AUTH_MODE=google` you sign in once via `<url>/auth/login` on the phone and paste
+the 7-day token. If iOS ever suspends the session mid-pocket, the planned hardening is CallKit
+via react-native-callkeep so walkie sessions present as real calls.
 
 ### Same app in the browser (Expo web)
 
@@ -110,18 +120,42 @@ The `/app` route on the walkie server serves the exported build same-origin, so 
 browser client and the phone app are the same codebase. `public/voice.html` remains as a
 zero-build fallback.
 
-## Expose remotely
+## Remote access (no local network)
+
+To reach the Mac's server from anywhere (cellular, not just wifi), expose `localhost:8787`
+over a stable public HTTPS URL. Recommended: **Tailscale Funnel** (stable hostname, no domain
+to buy, free).
+
+One-time setup:
 
 ```bash
-cloudflared tunnel --url http://localhost:8787   # quick tunnel for testing
+# 1. Log in (macOS GUI build: use the menu-bar app; CLI login is flaky)
+/Applications/Tailscale.app/Contents/MacOS/tailscale login
+
+# 2. Enable Funnel for this node — one-time browser consent. `tailscale funnel 8787`
+#    prints the exact enable URL (https://login.tailscale.com/f/funnel?node=...); open it.
+
+# 3. Serve localhost:8787 publicly, persistently (survives reboot)
+/Applications/Tailscale.app/Contents/MacOS/tailscale funnel --bg 8787
+
+# 4. Confirm
+/Applications/Tailscale.app/Contents/MacOS/tailscale funnel status
 ```
 
-For a stable hostname use a named Cloudflare tunnel. Remote clients call
-`https://<host>/mcp` with header `Authorization: Bearer $FLEET_TOKEN`.
+The public URL is `https://<machine>.<tailnet>.ts.net` (here
+`https://macbook-pro-178.taild03d67.ts.net`), which Tailscale terminates TLS on and proxies
+to `localhost:8787`. Because it hits localhost, set `HOST=127.0.0.1` in `.env`, no LAN
+exposure needed. With `AUTH_MODE=google`, set `PUBLIC_URL` to this URL and add
+`<url>/auth/callback` to the Google OAuth client's redirect URIs.
 
-- claude.ai: Settings > Connectors > Add custom connector.
+The mobile app defaults to this URL via `app.json` → `extra.walkieServerUrl`. Other clients:
+
+- claude.ai: Settings > Connectors > Add custom connector, URL `https://<host>/mcp`.
 - OpenAI Realtime (voice): session tool `{type: "mcp", server_url, authorization}`;
   put `spawn_worker`/`send_to_agent` behind `require_approval`.
+
+Alternative: a named `cloudflared` tunnel if you have a domain on Cloudflare (stable too), or
+`cloudflared tunnel --url http://localhost:8787` for a throwaway URL (changes on restart).
 
 ## Fleet safety
 
