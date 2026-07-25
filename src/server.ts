@@ -102,8 +102,16 @@ function buildServer(): McpServer {
           `user's verbatim consent phrase ("${CONSENT_PROMPT_EN}") in the consent field. A configurable ` +
           "command policy (WALKIE_DENY) additionally blocks e.g. deploys/publishes for all workers.",
         inputSchema: {
-          repo: z.string().describe("Git URL or owner/name, e.g. JuisciAdmin/smoothie"),
+          repo: z
+            .string()
+            .describe("Git URL or owner/name (existing), or the name for a new repo with newRepo:true"),
           task: z.string().min(10),
+          newRepo: z
+            .boolean()
+            .optional()
+            .describe(
+              "Create a new private GitHub repo (owner/name or name) and scaffold it, instead of cloning",
+            ),
           agent: z.enum(["claude", "opencode", "codex"]).optional().describe("Agent CLI (default claude)"),
           model: z
             .string()
@@ -118,7 +126,7 @@ function buildServer(): McpServer {
             .describe(`Required if any allow* is true: the user's verbatim "${CONSENT_PROMPT_EN}"`),
         },
       },
-      async ({ repo, task, agent, model, allowMainPush, allowMerge, allowForcePush, consent }) => {
+      async ({ repo, task, newRepo, agent, model, allowMainPush, allowMerge, allowForcePush, consent }) => {
         if (agent && !isAgentKind(agent)) {
           return {
             isError: true,
@@ -140,10 +148,12 @@ function buildServer(): McpServer {
           };
         }
         const grant = wantsElevated ? { allowMainPush, allowMerge, allowForcePush } : {};
-        const r = await spawnCliWorker(repo, task, grant, { agent, model });
-        const scope = wantsElevated
-          ? `authorized to ${[allowMainPush && "push main", allowMerge && "merge", allowForcePush && "force-push"].filter(Boolean).join(", ")}`
-          : "PR-only (no merge/main-push/force-push)";
+        const r = await spawnCliWorker(repo, task, grant, { agent, model, newRepo });
+        const scope = newRepo
+          ? "new repo (pushes main directly)"
+          : wantsElevated
+            ? `authorized to ${[allowMainPush && "push main", allowMerge && "merge", allowForcePush && "force-push"].filter(Boolean).join(", ")}`
+            : "PR-only (no merge/main-push/force-push)";
         const join = `join locally with: tmux attach -t ${r.tmuxSession}${r.remoteControl ? `; remote-control session "${r.name}" is live on claude.ai/code` : ""}`;
         return {
           content: [

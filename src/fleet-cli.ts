@@ -105,6 +105,26 @@ async function ensureClone(url: string, name: string): Promise<{ dir: string; ba
   return { dir, base };
 }
 
+/** Create a brand-new private GitHub repo and return a worktree dir on its main branch.
+ * Outward-facing (mints a real repo); only reached when spawn is called with newRepo. */
+async function createRepo(ref: string): Promise<{ dir: string; base: string; url: string }> {
+  const name = ref.split("/").pop() ?? ref;
+  const dir = join(REPOS, name);
+  await mkdir(dir, { recursive: true });
+  await sh("git", ["init", "-b", "main"], { cwd: dir });
+  await writeFile(join(dir, "README.md"), `# ${name}\n`);
+  await sh("git", ["add", "-A"], { cwd: dir });
+  await sh("git", ["-c", "user.email=walkie@local", "-c", "user.name=walkie", "commit", "-m", "init"], {
+    cwd: dir,
+  });
+  // gh infers the owner from `ref` if it contains a slash, else the authenticated user.
+  await sh("gh", ["repo", "create", ref, "--private", "--source", dir, "--remote", "origin", "--push"], {
+    timeoutMs: 120_000,
+  });
+  const url = (await sh("git", ["remote", "get-url", "origin"], { cwd: dir })).trim();
+  return { dir, base: "main", url };
+}
+
 async function tmuxHas(session: string): Promise<boolean> {
   try {
     await sh("tmux", ["has-session", "-t", session]);
@@ -158,25 +178,40 @@ export async function spawnCliWorker(
   repoRef: string,
   task: string,
   grant: Grant = {},
-  opts: { agent?: AgentKind; model?: string } = {},
+  opts: { agent?: AgentKind; model?: string; newRepo?: boolean } = {},
 ): Promise<SpawnResult> {
   const agent: AgentKind = opts.agent ?? "claude";
   const model = resolveModel(agent, opts.model);
-  const { name: repoName, url } = resolveRepo(repoRef);
-  const { dir: clone, base } = await ensureClone(url, repoName);
+  const { name: repoName } = resolveRepo(repoRef);
   const s = await loadState();
   const seed = Object.keys(s.workers).length + 1;
   const name = workerName(seed);
-  const branch = `${slugify(task)}-${seed.toString(36)}`;
-  const worktree = join(WTS, repoName, name);
   const tmuxSession = `walkie-${name}`;
-  await mkdir(join(WTS, repoName), { recursive: true });
-  await sh("git", ["worktree", "add", "-b", branch, worktree, `origin/${base}`], { cwd: clone });
+
+  let worktree: string;
+  let branch: string;
+  let base: string;
+  if (opts.newRepo) {
+    // Greenfield: create the repo and work directly on its main branch.
+    const created = await createRepo(repoRef);
+    worktree = created.dir;
+    base = created.base;
+    branch = base;
+  } else {
+    const { url } = resolveRepo(repoRef);
+    const cloned = await ensureClone(url, repoName);
+    base = cloned.base;
+    branch = `${slugify(task)}-${seed.toString(36)}`;
+    worktree = join(WTS, repoName, name);
+    await mkdir(join(WTS, repoName), { recursive: true });
+    await sh("git", ["worktree", "add", "-b", branch, worktree, `origin/${base}`], { cwd: cloned.dir });
+  }
 
   const policy = loadCommandPolicy(process.env);
   const caps: WorkerCaps = {
     mainBranch: base,
-    allowMainPush: grant.allowMainPush ?? false,
+    // A brand-new empty repo you own: pushing main is the normal first commit.
+    allowMainPush: opts.newRepo ? true : (grant.allowMainPush ?? false),
     allowMerge: grant.allowMerge ?? false,
     allowForcePush: grant.allowForcePush ?? false,
     deny: policy.deny,
