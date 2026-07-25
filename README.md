@@ -37,9 +37,21 @@ Env:
 ## Tools
 
 Read lane (deterministic): `fleet_status` (each worker's status), `agent_output`
-(a worker's live terminal), `task_history`.
+(a worker's live terminal), `task_history`, `search_memory` (past runs), `suggest_agent`
+(which agent/model to use for a task).
 Brain: `ask_orchestrator` (preferred for open questions; summaries happen Mac-side).
-Control lane: `spawn_worker`, `send_to_agent` (message a running worker), `reset_orchestrator`.
+Control lane: `spawn_worker`, `send_to_agent` (message a running worker), `record_run`
+(save a retrospective to memory), `reset_orchestrator`.
+
+### Project memory & routing
+
+Each run can be recorded to `~/.fleet-orchestrator/memory/<repo>/runs/*.json` via `record_run`
+(worker metadata is auto-filled; you add outcome + a right/wrong/improve retrospective and any
+harness suggestion). `search_memory` recalls what worked; `suggest_agent` recommends an
+agent+model for a task, preferring what the repo's memory shows worked, and otherwise a seed
+heuristic: **claude by default** (runs on your subscription, no marginal cost), **opencode +
+Kimi K3** for long-horizon terminal/agentic and systems work (worth the API cost), **claude**
+for web/UI/dataviz and multi-language breadth. Suggestions are advisory; you decide.
 
 ## Worker runtime
 

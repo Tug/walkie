@@ -11,13 +11,16 @@ import { AGENT_KINDS, isAgentKind } from "./agents.js";
 import { authMiddleware, loadAuthConfig, registerAuthRoutes } from "./auth.js";
 import {
   cliWorkerOutput,
+  getCliWorker,
   killCliWorker,
   listCliWorkers,
   messageCliWorker,
   spawnCliWorker,
 } from "./fleet-cli.js";
+import { recentRuns, recordRun, searchMemory } from "./memory.js";
 import { ask, resetSession } from "./orchestrator.js";
 import { CONSENT_PROMPT_EN, consentValid } from "./risk.js";
+import { suggestAgent } from "./router.js";
 import { voiceRouter } from "./voice.js";
 
 const PORT = Number(process.env.PORT ?? 8787);
@@ -77,6 +80,38 @@ function buildServer(): McpServer {
     async ({ repo }) => ({
       content: [{ type: "text", text: JSON.stringify(await listCliWorkers(repo), null, 2) }],
     }),
+  );
+
+  server.registerTool(
+    "search_memory",
+    {
+      title: "Search project memory",
+      description:
+        "Search past run records (task, agent/model, outcome, retrospective, harness notes) for a repo " +
+        "or across all repos. Use to recall what worked, what went wrong, and how to improve.",
+      inputSchema: {
+        query: z.string(),
+        repo: z.string().optional().describe("owner/name to scope to one repo; omit for all"),
+      },
+    },
+    async ({ query, repo }) => ({
+      content: [{ type: "text", text: JSON.stringify(await searchMemory(query, repo), null, 2) }],
+    }),
+  );
+
+  server.registerTool(
+    "suggest_agent",
+    {
+      title: "Suggest agent + model for a task",
+      description:
+        "Recommend which agent (claude/opencode/codex) and model to use for a task, using this repo's " +
+        "memory of what worked plus a seed heuristic. Advisory: returns a choice + rationale; you decide.",
+      inputSchema: { task: z.string(), repo: z.string().optional() },
+    },
+    async ({ task, repo }) => {
+      const s = suggestAgent(task, await recentRuns(repo, 40));
+      return { content: [{ type: "text", text: JSON.stringify(s, null, 2) }] };
+    },
   );
 
   server.registerTool(
@@ -177,6 +212,51 @@ function buildServer(): McpServer {
       async ({ agent, text }) => ({
         content: [{ type: "text", text: await messageCliWorker(agent, text) }],
       }),
+    );
+
+    server.registerTool(
+      "record_run",
+      {
+        title: "Record a run in project memory",
+        description:
+          "Save a retrospective for a worker into the repo's memory (what happened + what went right/" +
+          "wrong + what to improve + harness suggestions). Worker metadata (agent, model, task, branch, " +
+          "caps) is filled automatically. Call after reviewing a run so future routing learns from it.",
+        inputSchema: {
+          worker: z.string(),
+          outcome: z
+            .string()
+            .optional()
+            .describe('e.g. "PR #12 opened, CI green" or "abandoned: build broke"'),
+          right: z.string().optional(),
+          wrong: z.string().optional(),
+          improve: z.string().optional(),
+          harness: z.string().optional().describe("suggestion to improve walkie itself"),
+          tags: z.array(z.string()).optional(),
+        },
+      },
+      async ({ worker, outcome, right, wrong, improve, harness, tags }) => {
+        const w = await getCliWorker(worker);
+        if (!w) return { isError: true, content: [{ type: "text", text: `No worker "${worker}".` }] };
+        const rec = await recordRun({
+          repo: w.repo,
+          worker,
+          agent: w.agent,
+          model: w.model,
+          task: w.task,
+          branch: w.branch,
+          caps: {
+            allowMainPush: w.caps.allowMainPush,
+            allowMerge: w.caps.allowMerge,
+            allowForcePush: w.caps.allowForcePush,
+          },
+          outcome,
+          retro: right || wrong || improve ? { right, wrong, improve } : undefined,
+          harness,
+          tags,
+        });
+        return { content: [{ type: "text", text: `Recorded run ${rec.id} for ${w.repo}.` }] };
+      },
     );
 
     server.registerTool(

@@ -279,6 +279,10 @@ async function primeAndSend(
   }
 }
 
+export async function getCliWorker(name: string): Promise<CliWorker | undefined> {
+  return (await loadState()).workers[name];
+}
+
 export async function listCliWorkers(repo?: string): Promise<Array<CliWorker & { status: string }>> {
   const s = await loadState();
   const workers = Object.values(s.workers).filter((w) => !repo || w.repo === repo);
