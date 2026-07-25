@@ -10,8 +10,8 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
 import { type AgentKind, agentSignals, prepareAgent, resolveModel } from "./agents.js";
+import { loadCommandPolicy } from "./command-policy.js";
 import type { WorkerCaps } from "./gitguard.js";
-import type { RepoPolicy } from "./policy.js";
 import { capturePane, sendKeysRobust } from "./tmux.js";
 
 const exec = promisify(execFile);
@@ -77,16 +77,32 @@ const slugify = (t: string) =>
     .replace(/^-+|-+$/g, "")
     .slice(0, 32) || "task";
 
-async function ensureClone(policy: RepoPolicy): Promise<string> {
-  const dir = join(REPOS, policy.name);
+/** Resolve a repo reference (full git URL, or `owner/name`) into a clone URL + local name. */
+export function resolveRepo(ref: string): { name: string; url: string } {
+  const isUrl = /:\/\//.test(ref) || /^[^/]+@[^/]+:/.test(ref) || ref.endsWith(".git");
+  const url = isUrl ? ref : `git@github.com:${ref}.git`;
+  const name = (url.split("/").pop() ?? ref).replace(/\.git$/, "");
+  return { name, url };
+}
+
+async function ensureClone(url: string, name: string): Promise<{ dir: string; base: string }> {
+  const dir = join(REPOS, name);
   await mkdir(REPOS, { recursive: true });
   try {
     await readFile(join(dir, "HEAD"), "utf8");
     await sh("git", ["fetch", "origin", "--prune"], { cwd: dir });
   } catch {
-    await sh("git", ["clone", policy.url, dir], { timeoutMs: 600_000 });
+    await sh("git", ["clone", url, dir], { timeoutMs: 600_000 });
   }
-  return dir;
+  // Detect the remote's default branch (origin/HEAD → e.g. origin/main).
+  let base = "main";
+  try {
+    const head = await sh("git", ["rev-parse", "--abbrev-ref", "origin/HEAD"], { cwd: dir });
+    base = head.trim().replace(/^origin\//, "") || "main";
+  } catch {
+    /* keep default */
+  }
+  return { dir, base };
 }
 
 async function tmuxHas(session: string): Promise<boolean> {
@@ -139,29 +155,32 @@ export interface SpawnResult {
 }
 
 export async function spawnCliWorker(
-  policy: RepoPolicy,
+  repoRef: string,
   task: string,
   grant: Grant = {},
   opts: { agent?: AgentKind; model?: string } = {},
 ): Promise<SpawnResult> {
   const agent: AgentKind = opts.agent ?? "claude";
   const model = resolveModel(agent, opts.model);
-  const clone = await ensureClone(policy);
-  const base = policy.defaultBranch ?? "main";
+  const { name: repoName, url } = resolveRepo(repoRef);
+  const { dir: clone, base } = await ensureClone(url, repoName);
   const s = await loadState();
   const seed = Object.keys(s.workers).length + 1;
   const name = workerName(seed);
   const branch = `${slugify(task)}-${seed.toString(36)}`;
-  const worktree = join(WTS, policy.name, name);
+  const worktree = join(WTS, repoName, name);
   const tmuxSession = `walkie-${name}`;
-  await mkdir(join(WTS, policy.name), { recursive: true });
+  await mkdir(join(WTS, repoName), { recursive: true });
   await sh("git", ["worktree", "add", "-b", branch, worktree, `origin/${base}`], { cwd: clone });
 
+  const policy = loadCommandPolicy(process.env);
   const caps: WorkerCaps = {
     mainBranch: base,
     allowMainPush: grant.allowMainPush ?? false,
     allowMerge: grant.allowMerge ?? false,
     allowForcePush: grant.allowForcePush ?? false,
+    deny: policy.deny,
+    allow: policy.allow,
   };
 
   // Agent driver writes its gating files and returns how to launch it.
@@ -176,7 +195,7 @@ export async function spawnCliWorker(
 
   const worker: CliWorker = {
     name,
-    repo: policy.name,
+    repo: repoName,
     branch,
     task,
     worktree,

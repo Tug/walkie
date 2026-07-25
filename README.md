@@ -31,7 +31,7 @@ Env:
 
 - `FLEET_TOKEN` (required): bearer token for every MCP request.
 - `FLEET_CONTROL=off`: hide the write tools (spawn_worker, send_to_agent) for a read-only surface.
-- `WALKIE_REPOS` (required to spawn): JSON allowlist of repos, default-deny.
+- `WALKIE_DENY` / `WALKIE_ALLOW` (optional): JSON glob arrays for the command policy (see Fleet safety).
 - `PORT` (default 8787).
 
 ## Tools
@@ -235,25 +235,26 @@ PreToolUse hook rather than trusting the agent:
 | **Push to main** | allowed | off by default; per-worker grant |
 | **Force-push** | allowed | off by default; per-worker grant |
 | **Conventions** | its own prompts | the repo's own `AGENTS.md`/`CLAUDE.md` |
-| **Repos** | any you init | default-deny allowlist (`WALKIE_REPOS`) |
+| **Repos** | any you init | any repo you name (no gating; safety is per-command) |
 
-A worker does normal work freely, creating and pushing feature branches and opening PRs,
-which fits trunk-based development. The three irreversible actions are **capabilities, off by
-default**, granted per worker only when you explicitly ask; enabling any of them requires your
-verbatim consent phrase (`I give explicit consent to remove this`) passed to `spawn_worker`:
+Safety is **per-command, not per-repo** (any repo you name is fine, including shared ones).
+Three layers, all in `src/gitguard.ts` and enforced identically across claude/opencode/codex:
 
-- `allowMainPush` — push the base branch directly
-- `allowMerge` — `gh pr merge` / merge via API
-- `allowForcePush` — force-push
+1. **Per-worker capabilities**, off by default, granted only when you explicitly ask, and
+   enabling any requires your verbatim consent phrase (`I give explicit consent to remove this`)
+   on `spawn_worker`: `allowMainPush`, `allowMerge` (`gh pr merge`), `allowForcePush`.
+2. **Configurable command policy** (`WALKIE_DENY` / `WALKIE_ALLOW`, JSON glob arrays) blocks
+   arbitrary commands for *all* workers, with safe defaults (deploy/publish/secret actions like
+   `gh workflow run`, `gh release create`, `npm publish`). Add your own (`kubectl *`, …) or carve
+   exceptions via `WALKIE_ALLOW`.
+3. **Always-hard rules**: `--no-verify` (skips the repo's checks) and remote retargeting are
+   never allowed; shell chaining (`;`, `&&`, `|`) is rejected so nothing smuggles past.
 
-The guard (`src/gitguard.ts`, applied via the PreToolUse hook `src/hook.ts`) enforces these per
-worker and always blocks `--no-verify` (it would skip the repo's own checks) and remote
-retargeting. So "fix X and merge to main" works when you say so; an agent doing it unprompted
-cannot.
-
-The guard is command-parsing, so strong but not cryptographic. For a *hard* guarantee on
-shared repos, additionally run the fleet under a bot identity whose token cannot merge and can
-only push allowed refs, plus branch protection on the base branch. See DEPLOY.md.
+So "fix X and merge to main" works when you say so; an agent deploying to prod or merging
+unprompted cannot. The gate is command-parsing (strong, not cryptographic), and it's a hard
+intercept for claude (PreToolUse hook) and opencode (plugin) but a bypassable PATH-shim for
+codex. For a *hard* guarantee on shared repos, run the fleet under a bot identity whose token
+cannot merge and can only push allowed refs, plus branch protection. See DEPLOY.md.
 
 ## Security model
 

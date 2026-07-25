@@ -17,7 +17,6 @@ import {
   spawnCliWorker,
 } from "./fleet-cli.js";
 import { ask, resetSession } from "./orchestrator.js";
-import { repoPolicy } from "./policy.js";
 import { CONSENT_PROMPT_EN, consentValid } from "./risk.js";
 import { voiceRouter } from "./voice.js";
 
@@ -97,12 +96,13 @@ function buildServer(): McpServer {
       {
         title: "Spawn worker",
         description:
-          "Create a worker on an allowlisted repo. It works in its own worktree, follows the repo's " +
-          "conventions, and by default opens a PR (a human merges). The irreversible actions below are " +
-          "OFF unless the user explicitly asks; setting any of them requires the user's verbatim consent " +
-          `phrase ("${CONSENT_PROMPT_EN}") in the consent field. Refuses repos not in walkie's allowlist.`,
+          "Create a worker on a repo (a git URL or owner/name; cloned on demand). It works in its own " +
+          "worktree, follows the repo's conventions, and by default opens a PR (a human merges). The " +
+          "irreversible actions below are OFF unless the user explicitly asks; setting any requires the " +
+          `user's verbatim consent phrase ("${CONSENT_PROMPT_EN}") in the consent field. A configurable ` +
+          "command policy (WALKIE_DENY) additionally blocks e.g. deploys/publishes for all workers.",
         inputSchema: {
-          repo: z.string(),
+          repo: z.string().describe("Git URL or owner/name, e.g. JuisciAdmin/smoothie"),
           task: z.string().min(10),
           agent: z.enum(["claude", "opencode", "codex"]).optional().describe("Agent CLI (default claude)"),
           model: z
@@ -119,8 +119,6 @@ function buildServer(): McpServer {
         },
       },
       async ({ repo, task, agent, model, allowMainPush, allowMerge, allowForcePush, consent }) => {
-        const pol = repoPolicy(repo);
-        if (!pol.ok) return { isError: true, content: [{ type: "text", text: pol.reason }] };
         if (agent && !isAgentKind(agent)) {
           return {
             isError: true,
@@ -142,7 +140,7 @@ function buildServer(): McpServer {
           };
         }
         const grant = wantsElevated ? { allowMainPush, allowMerge, allowForcePush } : {};
-        const r = await spawnCliWorker(pol.policy, task, grant, { agent, model });
+        const r = await spawnCliWorker(repo, task, grant, { agent, model });
         const scope = wantsElevated
           ? `authorized to ${[allowMainPush && "push main", allowMerge && "merge", allowForcePush && "force-push"].filter(Boolean).join(", ")}`
           : "PR-only (no merge/main-push/force-push)";

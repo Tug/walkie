@@ -41,6 +41,8 @@ describe("worker git guard — capability based", () => {
       allowMainPush: true,
       allowMerge: true,
       allowForcePush: true,
+      deny: [],
+      allow: [],
     };
     noW("git push --no-verify origin main", all); // skips repo checks
     noW("git remote set-url origin git@evil:x/y.git", all);

@@ -5,13 +5,19 @@
 // do normal work freely, including pushing feature branches and opening PRs, and only the
 // irreversible / outward actions are gated to what the user explicitly authorized for that
 // worker: pushing the repo's main branch, merging, and force-pushing. `--no-verify` is always
-// blocked (it would skip the repo's own pre-commit/pre-push checks).
+// blocked (it would skip the repo's own pre-commit/pre-push checks). A configurable command
+// policy (caps.deny/allow) blocks arbitrary commands too (e.g. `gh workflow run` = deploy).
+
+import { commandDenied } from "./command-policy.js";
 
 export interface WorkerCaps {
   mainBranch: string; // e.g. "main" — pushing here needs allowMainPush
   allowMainPush: boolean;
   allowMerge: boolean;
   allowForcePush: boolean;
+  // Configurable command policy (any tool, not just git): deny patterns block, allow rescues.
+  deny: string[];
+  allow: string[];
 }
 
 export const DEFAULT_CAPS = (mainBranch = "main"): WorkerCaps => ({
@@ -19,6 +25,8 @@ export const DEFAULT_CAPS = (mainBranch = "main"): WorkerCaps => ({
   allowMainPush: false,
   allowMerge: false,
   allowForcePush: false,
+  deny: [],
+  allow: [],
 });
 
 export type Decision = { allow: true } | { allow: false; reason: string };
@@ -44,6 +52,9 @@ export function classifyWorkerCommand(cmd: string, caps: WorkerCaps): Decision {
   if (hasShellComposition(trimmed)) {
     return DENY("shell composition (;, &&, |, `, $()) is not allowed; run one command at a time");
   }
+  // Configurable command policy first (deploys, publishes, and anything the user blocked).
+  const policy = commandDenied(trimmed, { deny: caps.deny, allow: caps.allow });
+  if (policy.denied) return DENY(`blocked by command policy: matches "${policy.pattern}"`);
   const t = tokenize(trimmed);
   if (t.length === 0) return DENY("empty command");
   const bin = t[0];
