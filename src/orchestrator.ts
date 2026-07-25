@@ -57,6 +57,76 @@ async function saveSession(): Promise<void> {
   await writeFile(SESSION_FILE, JSON.stringify({ sessionId, savedAt: new Date().toISOString() }));
 }
 
+interface Attempt {
+  ok: boolean;
+  text: string;
+  sid?: string;
+  resumeError: boolean;
+}
+
+async function attempt(question: string, brief: string, resumeId: string | undefined): Promise<Attempt> {
+  let text = "";
+  let sid: string | undefined;
+  let ok = false;
+  try {
+    const q = query({
+      prompt: question,
+      options: {
+        systemPrompt: {
+          type: "preset",
+          preset: "claude_code",
+          append: brief ? `${SYSTEM_PROMPT}\n\n# Private brief\n\n${brief}` : SYSTEM_PROMPT,
+        },
+        resume: resumeId,
+        cwd: join(homedir(), ".fleet-orchestrator"),
+        // NOTE: no allowedTools here. Bare allowedTools entries auto-approve the whole
+        // tool BEFORE canUseTool is consulted (CLAUDE_SDK_CAN_USE_TOOL_SHADOWED), which
+        // would bypass the gates below. Every tool call must fall through to canUseTool.
+        canUseTool: async (toolName, input) => {
+          if (toolName === "Bash") {
+            const cmd = String((input as { command?: string }).command ?? "");
+            return commandAllowed(cmd)
+              ? { behavior: "allow", updatedInput: input }
+              : { behavior: "deny", message: `Command not in fleet allowlist: ${cmd}` };
+          }
+          if (toolName === "Write" || toolName === "Edit") {
+            const file = String((input as { file_path?: string }).file_path ?? "");
+            return writeAllowed(file)
+              ? { behavior: "allow", updatedInput: input }
+              : {
+                  behavior: "deny",
+                  message: `Writes are only allowed under ~/.fleet-orchestrator/: ${file}`,
+                };
+          }
+          if (toolName === "Read" || toolName === "Grep" || toolName === "Glob" || toolName === "TodoWrite") {
+            return { behavior: "allow", updatedInput: input };
+          }
+          return { behavior: "deny", message: `Tool ${toolName} is not available to the fleet orchestrator` };
+        },
+        maxTurns: 30,
+      },
+    });
+    for await (const msg of q) {
+      if (msg.type === "system" && msg.subtype === "init") {
+        sid = msg.session_id;
+      } else if (msg.type === "result") {
+        if (msg.subtype === "success") {
+          ok = true;
+          text = msg.result;
+        } else {
+          ok = false;
+          text = `Orchestrator error: ${msg.subtype}`;
+        }
+      }
+    }
+  } catch (err) {
+    text = (err as Error).message;
+  }
+  // A stale/missing resume session surfaces as "No conversation found with session ID …".
+  const resumeError = Boolean(resumeId) && /no conversation found|session id/i.test(text);
+  return { ok, text, sid, resumeError };
+}
+
 async function runQuery(question: string): Promise<string> {
   await loadSession();
   let brief = "";
@@ -65,50 +135,15 @@ async function runQuery(question: string): Promise<string> {
   } catch {
     // no brief file: fine
   }
-  let answer = "";
-  const q = query({
-    prompt: question,
-    options: {
-      systemPrompt: {
-        type: "preset",
-        preset: "claude_code",
-        append: brief ? `${SYSTEM_PROMPT}\n\n# Private brief\n\n${brief}` : SYSTEM_PROMPT,
-      },
-      resume: sessionId,
-      cwd: join(homedir(), ".fleet-orchestrator"),
-      // NOTE: no allowedTools here. Bare allowedTools entries auto-approve the whole
-      // tool BEFORE canUseTool is consulted (CLAUDE_SDK_CAN_USE_TOOL_SHADOWED), which
-      // would bypass the gates below. Every tool call must fall through to canUseTool.
-      canUseTool: async (toolName, input) => {
-        if (toolName === "Bash") {
-          const cmd = String((input as { command?: string }).command ?? "");
-          return commandAllowed(cmd)
-            ? { behavior: "allow", updatedInput: input }
-            : { behavior: "deny", message: `Command not in fleet allowlist: ${cmd}` };
-        }
-        if (toolName === "Write" || toolName === "Edit") {
-          const file = String((input as { file_path?: string }).file_path ?? "");
-          return writeAllowed(file)
-            ? { behavior: "allow", updatedInput: input }
-            : { behavior: "deny", message: `Writes are only allowed under ~/.fleet-orchestrator/: ${file}` };
-        }
-        if (toolName === "Read" || toolName === "Grep" || toolName === "Glob" || toolName === "TodoWrite") {
-          return { behavior: "allow", updatedInput: input };
-        }
-        return { behavior: "deny", message: `Tool ${toolName} is not available to the fleet orchestrator` };
-      },
-      maxTurns: 30,
-    },
-  });
-  for await (const msg of q) {
-    if (msg.type === "system" && msg.subtype === "init") {
-      sessionId = msg.session_id;
-    } else if (msg.type === "result") {
-      answer = msg.subtype === "success" ? msg.result : `Orchestrator error: ${msg.subtype}`;
-    }
+  let r = await attempt(question, brief, sessionId);
+  if ((!r.ok || r.resumeError) && sessionId) {
+    // Stale session: drop it and retry once on a fresh conversation.
+    sessionId = undefined;
+    r = await attempt(question, brief, undefined);
   }
+  if (r.sid) sessionId = r.sid;
   await saveSession();
-  return answer || "(no answer)";
+  return r.text || "(no answer)";
 }
 
 /** Ask the resident orchestrator. Calls are serialized: one brain, one thread of thought. */

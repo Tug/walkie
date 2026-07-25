@@ -77,12 +77,34 @@ const slugify = (t: string) =>
     .replace(/^-+|-+$/g, "")
     .slice(0, 32) || "task";
 
-/** Resolve a repo reference (full git URL, or `owner/name`) into a clone URL + local name. */
-export function resolveRepo(ref: string): { name: string; url: string } {
+/** Resolve a repo reference into a clone URL + local name.
+ * Accepts a full git URL, `owner/name`, or a bare `name` (needs defaultOwner). */
+export function resolveRepo(ref: string, defaultOwner?: string): { name: string; url: string } {
   const isUrl = /:\/\//.test(ref) || /^[^/]+@[^/]+:/.test(ref) || ref.endsWith(".git");
-  const url = isUrl ? ref : `git@github.com:${ref}.git`;
-  const name = (url.split("/").pop() ?? ref).replace(/\.git$/, "");
-  return { name, url };
+  if (isUrl) {
+    const name = (ref.split(/[/:]/).pop() ?? ref).replace(/\.git$/, "");
+    return { name, url: ref };
+  }
+  let slug = ref.replace(/\.git$/, "");
+  if (!slug.includes("/")) {
+    if (!defaultOwner) {
+      throw new Error(
+        `Repo "${ref}" has no owner. Use owner/name (e.g. Tug/${ref}) or set WALKIE_DEFAULT_OWNER.`,
+      );
+    }
+    slug = `${defaultOwner}/${slug}`;
+  }
+  return { name: slug.split("/").pop() ?? slug, url: `git@github.com:${slug}.git` };
+}
+
+/** The GitHub owner to assume for bare repo names: WALKIE_DEFAULT_OWNER, else the gh login. */
+async function defaultOwner(): Promise<string | undefined> {
+  if (process.env.WALKIE_DEFAULT_OWNER) return process.env.WALKIE_DEFAULT_OWNER;
+  try {
+    return (await sh("gh", ["api", "user", "-q", ".login"], { timeoutMs: 15_000 })).trim() || undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 async function ensureClone(url: string, name: string): Promise<{ dir: string; base: string }> {
@@ -182,7 +204,7 @@ export async function spawnCliWorker(
 ): Promise<SpawnResult> {
   const agent: AgentKind = opts.agent ?? "claude";
   const model = resolveModel(agent, opts.model);
-  const { name: repoName } = resolveRepo(repoRef);
+  const { name: repoName, url: repoUrl } = resolveRepo(repoRef, await defaultOwner());
   const s = await loadState();
   const seed = Object.keys(s.workers).length + 1;
   const name = workerName(seed);
@@ -198,8 +220,7 @@ export async function spawnCliWorker(
     base = created.base;
     branch = base;
   } else {
-    const { url } = resolveRepo(repoRef);
-    const cloned = await ensureClone(url, repoName);
+    const cloned = await ensureClone(repoUrl, repoName);
     base = cloned.base;
     branch = `${slugify(task)}-${seed.toString(36)}`;
     worktree = join(WTS, repoName, name);

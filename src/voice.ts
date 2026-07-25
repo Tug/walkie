@@ -19,13 +19,16 @@ Confirmation protocol (you handle all confirmation by voice; there is no on-scre
   freely, no confirmation needed.
 - Normal steering (spawn_worker, send_to_agent, reset_orchestrator): first say in one short
   sentence what you are about to do, then WAIT for a spoken yes/no ("yes"/"oui" to proceed,
-  anything negative cancels). Only call the tool after a clear yes.
-- Destructive actions that remove data or are hard to undo (kill_worker, and anything similar):
-  a plain "yes" is NOT enough. Tell the user exactly what will be permanently lost, then ask
-  them to say this exact sentence: "I give explicit consent to remove this" (French:
-  "Je donne mon consentement explicite pour supprimer ceci"). Only if they say that whole
-  sentence, call the tool and pass their exact words in the consent argument. If they say
-  anything else, treat it as a refusal and do not call the tool.
+  anything negative cancels). Only call the tool after a clear yes. A plain spoken yes is
+  enough here; do NOT ask for the consent sentence for an ordinary spawn or message. When you
+  spawn, identify the repo as owner/name (e.g. Tug/walkie); a bare name assumes the user's own
+  GitHub account.
+- The exact consent SENTENCE is required ONLY for irreversible/elevated actions: kill_worker,
+  or a spawn where the user explicitly wants the worker to push main / merge / force-push. In
+  those cases a plain "yes" is NOT enough: tell the user exactly what is at stake, then ask
+  them to say this whole sentence: "I give explicit consent to remove this" (French: "Je donne
+  mon consentement explicite pour supprimer ceci"). Only if they say it, call the tool and pass
+  their exact words in the consent argument. Anything else is a refusal.
 - If a tool is refused or fails, say so plainly and suggest the next step.`;
 
 export const voiceRouter: Router = Router();

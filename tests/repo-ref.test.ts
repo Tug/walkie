@@ -10,6 +10,13 @@ describe("resolveRepo", () => {
   });
   test("full URLs pass through", () => {
     expect(resolveRepo("git@github.com:Tug/walkie.git").url).toBe("git@github.com:Tug/walkie.git");
+    expect(resolveRepo("git@github.com:Tug/walkie.git").name).toBe("walkie");
     expect(resolveRepo("https://github.com/Tug/walkie.git").name).toBe("walkie");
+  });
+  test("bare name uses the default owner", () => {
+    expect(resolveRepo("walkie", "Tug")).toEqual({ name: "walkie", url: "git@github.com:Tug/walkie.git" });
+  });
+  test("bare name without a default owner is a clear error (the reported bug)", () => {
+    expect(() => resolveRepo("walkie")).toThrow(/no owner/i);
   });
 });
