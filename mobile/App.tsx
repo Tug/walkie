@@ -45,12 +45,13 @@ export default function App() {
 
   useEffect(() => {
     (async () => {
-      const vals = await AsyncStorage.getMany(["serverUrl", "fleetToken"]);
+      const vals = await AsyncStorage.getMany(["fleetToken"]);
       if (vals.fleetToken) setToken(vals.fleetToken);
-      // On web the app is served by the walkie server itself: default to that origin
-      // and detect an existing cookie session (AUTH_MODE=google).
+      // Server URL is authoritative from config, not persisted: on web the app is served by
+      // the walkie server (its own origin); on native the baked default (extra.walkieServerUrl).
+      // This avoids a stale saved URL (e.g. an old LAN IP) shadowing the current default.
       const origin = Platform.OS === "web" ? ((globalThis as any).location?.origin ?? "") : "";
-      const base = vals.serverUrl || origin || DEFAULT_SERVER_URL;
+      const base = origin || DEFAULT_SERVER_URL;
       if (base) setServerUrl(base);
       // Detect an existing cookie session (AUTH_MODE=google) against the resolved base.
       const probe = origin || DEFAULT_SERVER_URL;
@@ -71,7 +72,7 @@ export default function App() {
       setStatus("Server URL and token are required (on web, a session cookie also works)");
       return;
     }
-    await AsyncStorage.setMany({ serverUrl: base, fleetToken: token.trim() });
+    await AsyncStorage.setMany({ fleetToken: token.trim() });
     setPhase("connecting");
     let mic: unknown;
     try {
