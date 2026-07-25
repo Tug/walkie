@@ -1,15 +1,15 @@
-// CLI-in-tmux worker backend. Each worker is an interactive `claude` session in its own tmux
-// session + git worktree, so it can be joined locally (`tmux attach`) and remote-controlled to
-// a phone. It runs on your claude.ai subscription (not API credits) and is gated by the
-// PreToolUse hook (src/hook.ts) under --permission-mode dontAsk (never bypass). The walkie
-// server is the only coordinator; there is no supervisor and no merge-queue.
+// CLI-in-tmux worker backend. Each worker is an interactive agent CLI (claude / opencode /
+// codex) in its own tmux session + git worktree, so it can be joined locally (`tmux attach`)
+// and, for claude, remote-controlled to a phone. Each is gated by the shared capability guard
+// (src/gitguard.ts) via its agent driver (src/agents.ts). The walkie server is the only
+// coordinator; there is no supervisor and no merge-queue.
 
 import { execFile } from "node:child_process";
 import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
-import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
+import { join } from "node:path";
 import { promisify } from "node:util";
+import { type AgentKind, agentSignals, prepareAgent, resolveModel } from "./agents.js";
 import type { WorkerCaps } from "./gitguard.js";
 import type { RepoPolicy } from "./policy.js";
 import { capturePane, sendKeysRobust } from "./tmux.js";
@@ -19,9 +19,7 @@ const ROOT = join(homedir(), ".fleet-orchestrator", "cli");
 const REPOS = join(ROOT, "repos");
 const WTS = join(ROOT, "wts");
 const STATE = join(ROOT, "fleet.json");
-const HOOK_PATH = join(dirname(fileURLToPath(import.meta.url)), "hook.ts");
 const REMOTE_CONTROL = process.env.WALKIE_REMOTE_CONTROL === "on";
-const CLAUDE_BIN = process.env.CLAUDE_BIN ?? "claude";
 
 export interface CliWorker {
   name: string;
@@ -30,6 +28,8 @@ export interface CliWorker {
   task: string;
   worktree: string;
   tmuxSession: string;
+  agent: AgentKind;
+  model?: string;
   caps: WorkerCaps;
   createdAt: string;
 }
@@ -142,7 +142,10 @@ export async function spawnCliWorker(
   policy: RepoPolicy,
   task: string,
   grant: Grant = {},
+  opts: { agent?: AgentKind; model?: string } = {},
 ): Promise<SpawnResult> {
+  const agent: AgentKind = opts.agent ?? "claude";
+  const model = resolveModel(agent, opts.model);
   const clone = await ensureClone(policy);
   const base = policy.defaultBranch ?? "main";
   const s = await loadState();
@@ -161,30 +164,14 @@ export async function spawnCliWorker(
     allowForcePush: grant.allowForcePush ?? false,
   };
 
-  // Settings that install our gate hook and disable prompts (the hook is the sole gate).
-  const settingsPath = join(worktree, ".walkie-settings.json");
-  await writeFile(
-    settingsPath,
-    JSON.stringify(
-      {
-        permissions: { defaultMode: "dontAsk" },
-        hooks: { PreToolUse: { type: "command", command: `bun ${HOOK_PATH}` } },
-      },
-      null,
-      2,
-    ),
-  );
-
-  // Launch interactive claude in its own tmux session, in the worktree, gated + subscription-billed.
-  const claudeArgs = [
-    "--settings",
-    settingsPath,
-    "--permission-mode",
-    "dontAsk",
-    ...(REMOTE_CONTROL ? ["--remote-control", name] : []),
-  ];
-  const capsJson = JSON.stringify(caps).replace(/'/g, "'\\''");
-  const launch = `WALKIE_CAPS='${capsJson}' ${CLAUDE_BIN} ${claudeArgs.map((a) => `'${a.replace(/'/g, "'\\''")}'`).join(" ")}`;
+  // Agent driver writes its gating files and returns how to launch it.
+  const plan = await prepareAgent(agent, { worktree, caps, base, model });
+  // Remote control is a claude-only feature (steer from phone); other CLIs join via tmux attach.
+  const rc = agent === "claude" && REMOTE_CONTROL ? ` '--remote-control' '${name}'` : "";
+  const envPrefix = Object.entries({ WALKIE_CAPS: JSON.stringify(caps), ...plan.env })
+    .map(([k, v]) => `${k}='${String(v).replace(/'/g, "'\\''")}'`)
+    .join(" ");
+  const launch = `${envPrefix} ${plan.command}${rc}`;
   await sh("tmux", ["new-session", "-d", "-s", tmuxSession, "-c", worktree, launch]);
 
   const worker: CliWorker = {
@@ -194,18 +181,21 @@ export async function spawnCliWorker(
     task,
     worktree,
     tmuxSession,
+    agent,
+    model,
     caps,
     createdAt: new Date().toISOString(),
   };
   s.workers[name] = worker;
   await saveState(s);
 
-  // Give claude a moment to boot, clear a first-run trust prompt if any, then send the task.
-  void primeAndSend(tmuxSession, base, caps, worktree, task);
-  return { name, branch, tmuxSession, remoteControl: REMOTE_CONTROL };
+  // Give the CLI a moment to boot, clear a first-run trust prompt if any, then send the task.
+  void primeAndSend(agent, tmuxSession, base, caps, worktree, task);
+  return { name, branch, tmuxSession, remoteControl: agent === "claude" && REMOTE_CONTROL };
 }
 
 async function primeAndSend(
+  agent: AgentKind,
   session: string,
   base: string,
   caps: WorkerCaps,
@@ -214,17 +204,18 @@ async function primeAndSend(
 ): Promise<void> {
   const conventions = await readConventions(worktree);
   const target = `${session}:0`;
+  const sig = agentSignals(agent);
   try {
     // Poll for readiness / trust prompt for up to ~30s.
     for (let i = 0; i < 15; i++) {
       await new Promise((r) => setTimeout(r, 2000));
       if (!(await tmuxHas(session))) return; // killed before it was primed
       const pane = await capturePane(target, 40);
-      if (/Do you trust the files in this folder\?/.test(pane)) {
-        await sendKeysRobust(target, "1");
+      if (sig.trust?.pattern.test(pane)) {
+        await sendKeysRobust(target, sig.trust.send);
         continue;
       }
-      if (/❯|Try "|esc to interrupt|Welcome/.test(pane)) break; // prompt is ready
+      if (sig.ready.test(pane) || sig.working.test(pane)) break;
     }
     if (!(await tmuxHas(session))) return;
     const full = `${WORKER_PROMPT(base, caps, conventions)}\n\nTASK: ${task}`;
@@ -246,10 +237,11 @@ export async function listCliWorkers(repo?: string): Promise<Array<CliWorker & {
       } catch {
         return { ...w, status: "ended" };
       }
-      const status = /esc to interrupt/.test(pane)
-        ? "working"
-        : /Do you trust the files/.test(pane)
-          ? "blocked:trust"
+      const sig = agentSignals(w.agent ?? "claude");
+      const status = sig.trust?.pattern.test(pane)
+        ? "blocked:trust"
+        : sig.working.test(pane)
+          ? "working"
           : "idle";
       return { ...w, status };
     }),

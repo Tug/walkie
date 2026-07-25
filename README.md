@@ -43,19 +43,32 @@ Control lane: `spawn_worker`, `send_to_agent` (message a running worker), `reset
 
 ## Worker runtime
 
-Each worker is an interactive `claude` session in its own **tmux session** (`walkie-<name>`)
-and git worktree. Consequences:
+Each worker is an interactive agent CLI in its own **tmux session** (`walkie-<name>`) and git
+worktree. Consequences:
 
-- **Runs on your claude.ai subscription**, not API credits (the interactive CLI uses your
-  login; the Agent SDK would be API-key-only).
 - **Joinable locally**: `tmux attach -t walkie-<name>` to watch or take over.
-- **Remote-controllable**: set `WALKIE_REMOTE_CONTROL=on` and each worker launches with
-  `--remote-control`, so you can steer it from the Claude mobile app / claude.ai/code.
+- **Remote-controllable** (claude only): set `WALKIE_REMOTE_CONTROL=on` and claude workers
+  launch with `--remote-control`, so you can steer from the Claude mobile app / claude.ai/code.
 - `fleet_status` reports each worker's live status (`working` / `idle` / `blocked:trust` /
   `ended`) from its tmux pane; `send_to_agent` types into the live session.
 
-The worker runs under `--permission-mode dontAsk` (never bypass) with a **PreToolUse hook**
-(`src/hook.ts`) as the sole gate, so it works unattended without stalling on prompts.
+### Agents
+
+`spawn_worker` takes `agent` ∈ `claude` | `opencode` | `codex` (default `claude`) and an
+optional `model` (for opencode as `provider/model`, e.g. `moonshot/kimi-k3`, `zhipu/glm-5.2`,
+`anthropic/…`, `openai/…`; opencode needs the provider's API key in the server env). All three
+run gated by the shared capability guard (`src/gitguard.ts`), but the enforcement mechanism
+differs per CLI:
+
+| Agent | Billing | Gate | Strength |
+|---|---|---|---|
+| **claude** | claude.ai subscription | `--permission-mode dontAsk` + PreToolUse hook (`src/hook.ts`) | hard (intercepts the tool call) |
+| **opencode** | provider API key | `tool.execute.before` plugin runs `gitguard`, throws = deny | hard (intercepts the tool call) |
+| **codex** | provider API key | `--sandbox workspace-write` + network on + a `git`/`gh` PATH-shim (`src/shim.ts`) | soft (bypassable by absolute path) |
+
+codex has no per-command hook, so its shim is bypassable (`/usr/bin/git …`); for shared repos
+pair it with the credential backstop (see Fleet safety). Claude workers run on your
+subscription; opencode/codex bill their provider API key.
 
 ## Voice client
 

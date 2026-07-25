@@ -7,6 +7,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import express from "express";
 import { z } from "zod";
+import { AGENT_KINDS, isAgentKind } from "./agents.js";
 import { authMiddleware, loadAuthConfig, registerAuthRoutes } from "./auth.js";
 import {
   cliWorkerOutput,
@@ -103,6 +104,11 @@ function buildServer(): McpServer {
         inputSchema: {
           repo: z.string(),
           task: z.string().min(10),
+          agent: z.enum(["claude", "opencode", "codex"]).optional().describe("Agent CLI (default claude)"),
+          model: z
+            .string()
+            .optional()
+            .describe("Model, esp. for opencode as provider/model (e.g. moonshot/kimi-k3)"),
           allowMainPush: z.boolean().optional().describe("Let the worker push the main branch directly"),
           allowMerge: z.boolean().optional().describe("Let the worker merge PRs"),
           allowForcePush: z.boolean().optional().describe("Let the worker force-push"),
@@ -112,9 +118,15 @@ function buildServer(): McpServer {
             .describe(`Required if any allow* is true: the user's verbatim "${CONSENT_PROMPT_EN}"`),
         },
       },
-      async ({ repo, task, allowMainPush, allowMerge, allowForcePush, consent }) => {
+      async ({ repo, task, agent, model, allowMainPush, allowMerge, allowForcePush, consent }) => {
         const pol = repoPolicy(repo);
         if (!pol.ok) return { isError: true, content: [{ type: "text", text: pol.reason }] };
+        if (agent && !isAgentKind(agent)) {
+          return {
+            isError: true,
+            content: [{ type: "text", text: `agent must be one of ${AGENT_KINDS.join(", ")}` }],
+          };
+        }
         const wantsElevated = Boolean(allowMainPush || allowMerge || allowForcePush);
         if (wantsElevated && !consentValid(consent)) {
           return {
@@ -130,7 +142,7 @@ function buildServer(): McpServer {
           };
         }
         const grant = wantsElevated ? { allowMainPush, allowMerge, allowForcePush } : {};
-        const r = await spawnCliWorker(pol.policy, task, grant);
+        const r = await spawnCliWorker(pol.policy, task, grant, { agent, model });
         const scope = wantsElevated
           ? `authorized to ${[allowMainPush && "push main", allowMerge && "merge", allowForcePush && "force-push"].filter(Boolean).join(", ")}`
           : "PR-only (no merge/main-push/force-push)";
@@ -139,7 +151,7 @@ function buildServer(): McpServer {
           content: [
             {
               type: "text",
-              text: `Spawned worker ${r.name} on ${repo} (branch ${r.branch}), ${scope}. ${join}.`,
+              text: `Spawned ${agent ?? "claude"} worker ${r.name} on ${repo} (branch ${r.branch}), ${scope}. ${join}.`,
             },
           ],
         };
