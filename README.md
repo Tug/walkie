@@ -120,42 +120,91 @@ The `/app` route on the walkie server serves the exported build same-origin, so 
 browser client and the phone app are the same codebase. `public/voice.html` remains as a
 zero-build fallback.
 
-## Remote access (no local network)
+## Exposing the machine (remote access)
 
-To reach the Mac's server from anywhere (cellular, not just wifi), expose `localhost:8787`
-over a stable public HTTPS URL. Recommended: **Tailscale Funnel** (stable hostname, no domain
-to buy, free).
+The server binds `127.0.0.1:8787` by default. To reach it from your phone off-wifi, expose it
+over a public HTTPS URL. Four methods, pick by what you have:
 
-One-time setup:
+| Method | Stable URL | Needs | Best for |
+|---|---|---|---|
+| **Tailscale Funnel** (recommended) | yes | Tailscale login (free), no domain | personal, permanent |
+| **Named Cloudflare tunnel** | yes | a domain on Cloudflare | your own domain |
+| **Quick Cloudflare tunnel** | no (random, per run) | nothing | a 10-second throwaway test |
+| **LAN** (`HOST=0.0.0.0`) | LAN IP | same wifi | local dev only |
+
+With any tunnel, keep `HOST=127.0.0.1` (the tunnel connects to localhost, so the Mac is never
+exposed on the LAN). The mobile app's default URL lives in `mobile/app.json` →
+`extra.walkieServerUrl`; other clients (claude.ai connector at `https://<host>/mcp`, an OpenAI
+Realtime voice session's `{type:"mcp", server_url, authorization}`) just take the URL.
+
+### Tailscale Funnel (recommended)
 
 ```bash
-# 1. Log in (macOS GUI build: use the menu-bar app; CLI login is flaky)
-/Applications/Tailscale.app/Contents/MacOS/tailscale login
-
-# 2. Enable Funnel for this node — one-time browser consent. `tailscale funnel 8787`
-#    prints the exact enable URL (https://login.tailscale.com/f/funnel?node=...); open it.
-
-# 3. Serve localhost:8787 publicly, persistently (survives reboot)
-/Applications/Tailscale.app/Contents/MacOS/tailscale funnel --bg 8787
-
-# 4. Confirm
-/Applications/Tailscale.app/Contents/MacOS/tailscale funnel status
+TS=/Applications/Tailscale.app/Contents/MacOS/tailscale
+# 1. Log in (macOS GUI build: use the menu-bar app; the CLI login can be flaky)
+$TS login
+# 2. Enable Funnel for this node — one-time browser consent. Running the serve command
+#    below prints the exact enable URL (https://login.tailscale.com/f/funnel?node=...).
+# 3. Serve localhost:8787 publicly and persistently (survives reboot)
+$TS funnel --bg 8787
+$TS funnel status          # confirm; prints https://<machine>.<tailnet>.ts.net
 ```
 
-The public URL is `https://<machine>.<tailnet>.ts.net` (here
-`https://macbook-pro-178.taild03d67.ts.net`), which Tailscale terminates TLS on and proxies
-to `localhost:8787`. Because it hits localhost, set `HOST=127.0.0.1` in `.env`, no LAN
-exposure needed. With `AUTH_MODE=google`, set `PUBLIC_URL` to this URL and add
-`<url>/auth/callback` to the Google OAuth client's redirect URIs.
+Tailscale terminates TLS and proxies the public `https://<machine>.<tailnet>.ts.net` to
+`localhost:8787`. Turn it off with `$TS funnel --https=443 off` (or `$TS serve reset`).
 
-The mobile app defaults to this URL via `app.json` → `extra.walkieServerUrl`. Other clients:
+### Cloudflare tunnel
 
-- claude.ai: Settings > Connectors > Add custom connector, URL `https://<host>/mcp`.
-- OpenAI Realtime (voice): session tool `{type: "mcp", server_url, authorization}`;
-  put `spawn_worker`/`send_to_agent` behind `require_approval`.
+```bash
+# Named (stable) — needs a domain on your Cloudflare account:
+cloudflared tunnel login
+cloudflared tunnel create walkie
+cloudflared tunnel route dns walkie walkie.example.com
+cloudflared tunnel run --url http://localhost:8787 walkie   # persist via a launchd service
 
-Alternative: a named `cloudflared` tunnel if you have a domain on Cloudflare (stable too), or
-`cloudflared tunnel --url http://localhost:8787` for a throwaway URL (changes on restart).
+# Quick (throwaway, random URL that changes each run) — no login, no domain:
+cloudflared tunnel --url http://localhost:8787
+```
+
+For a Cloud Run deployment (public by default, but gateway-only — no fleet), see DEPLOY.md.
+
+## Authentication
+
+Two modes, set by `AUTH_MODE` (see `.env.example`):
+
+- **`token`** (default): one shared bearer, `FLEET_TOKEN` (generate with `openssl rand -hex 24`).
+  Zero setup; every request needs `Authorization: Bearer <token>`. Good for personal/solo use.
+- **`google`**: Google Workspace SSO restricted to a domain (`GOOGLE_ALLOWED_DOMAIN`, default
+  `juisci.com`). A signed 7-day session (HS256) is issued as an httpOnly cookie (web,
+  same-origin) or handed to the mobile app via a `walkie://` deep link (one-tap sign-in).
+  `FLEET_TOKEN`, if also set, still works as a bearer for machine clients (CI, connectors).
+
+### Setting up the Google OAuth client
+
+Needed only for `AUTH_MODE=google`. In the [Google Cloud Console](https://console.cloud.google.com/apis/credentials)
+→ APIs & Services → Credentials → **Create credentials → OAuth client ID**:
+
+1. Application type: **Web application**.
+2. **Authorized redirect URIs** — add one `<PUBLIC_URL>/auth/callback` per environment you use:
+   - local via tunnel: `https://<machine>.<tailnet>.ts.net/auth/callback`
+   - Cloud Run: `https://<your-domain>/auth/callback`
+   You do **not** register the mobile `walkie://` scheme with Google, the callback redirects to
+   it server-side after Google is done, so Google only ever sees the HTTPS callback.
+3. Copy the **client ID** and **client secret** into the server env:
+
+```bash
+# .env (local)
+AUTH_MODE=google
+GOOGLE_CLIENT_ID=...apps.googleusercontent.com
+GOOGLE_CLIENT_SECRET=GOCSPX-...
+GOOGLE_ALLOWED_DOMAIN=juisci.com
+SESSION_SECRET=$(openssl rand -hex 32)   # signs the 7-day sessions
+PUBLIC_URL=https://<machine>.<tailnet>.ts.net   # must exactly match the redirect URI host
+```
+
+For Cloud Run these go in Secret Manager instead, see DEPLOY.md. Sign-in flow: browser →
+`<PUBLIC_URL>/auth/login` sets the cookie; mobile → the app's "Sign in with Google" button
+calls `/auth/login?client=app` and receives the session over `walkie://auth`.
 
 ## Fleet safety
 

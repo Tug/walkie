@@ -15,11 +15,10 @@ A Cloud Run container has no tmux, no multiclaude daemon and no local Claude log
 
 ## 1. Google OAuth client
 
-In Google Cloud Console (APIs & Services > Credentials), create an OAuth client ID of type
-"Web application":
-
-- Authorized redirect URI: `https://<your-domain>/auth/callback`
-- Note the client ID and client secret.
+Create a "Web application" OAuth client (full steps in the README "Authentication" section).
+For Cloud Run, the authorized redirect URI is `https://<your-domain>/auth/callback` (add other
+environments' callbacks too if you reuse the client). The mobile `walkie://` scheme is not
+registered with Google, the callback redirects to it server-side. Note the client ID and secret.
 
 ## 2. Secrets in Secret Manager
 
