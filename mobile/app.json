@@ -2,7 +2,7 @@
   "expo": {
     "name": "walkie",
     "slug": "walkie",
-    "version": "0.2.0",
+    "version": "0.3.0",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "dark",
@@ -44,7 +44,8 @@
     "plugins": [
       "expo-dev-client",
       "@config-plugins/react-native-webrtc",
-      "expo-image-picker"
+      "expo-image-picker",
+      "expo-web-browser"
     ],
     "owner": "tug",
     "extra": {
@@ -59,6 +60,7 @@
     },
     "experiments": {
       "baseUrl": "/app"
-    }
+    },
+    "scheme": "walkie"
   }
 }

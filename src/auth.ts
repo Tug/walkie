@@ -114,9 +114,12 @@ export function registerAuthRoutes(app: Express, config: AuthConfig): void {
   const g = config.google;
   const redirectUri = `${g.publicUrl}/auth/callback`;
 
-  app.get("/auth/login", (_req, res) => {
+  app.get("/auth/login", (req, res) => {
+    // client=app → deliver the session to the native app via a walkie:// deep link
+    // instead of a cookie. The intent is carried inside the signed state (tamper-proof).
+    const client = req.query.client === "app" ? "app" : "web";
     const state = signSession(
-      { n: b64url(randomBytes(12)), exp: Math.floor(Date.now() / 1000) + 600 },
+      { n: b64url(randomBytes(12)), exp: Math.floor(Date.now() / 1000) + 600, client },
       g.sessionSecret,
     );
     const url = new URL("https://accounts.google.com/o/oauth2/v2/auth");
@@ -131,9 +134,11 @@ export function registerAuthRoutes(app: Express, config: AuthConfig): void {
 
   app.get("/auth/callback", async (req, res) => {
     const { code, state } = req.query as { code?: string; state?: string };
-    if (!code || !state || !verifySession(state, g.sessionSecret)) {
+    const st = state ? verifySession(state, g.sessionSecret) : null;
+    if (!code || !st) {
       return res.status(400).send("Invalid OAuth state or missing code.");
     }
+    const isApp = st.client === "app";
     const tokenRes = await fetch("https://oauth2.googleapis.com/token", {
       method: "POST",
       headers: { "Content-Type": "application/x-www-form-urlencoded" },
@@ -169,6 +174,10 @@ export function registerAuthRoutes(app: Express, config: AuthConfig): void {
       { sub: claims.email, exp: Math.floor(Date.now() / 1000) + SESSION_DAYS * 86400 },
       g.sessionSecret,
     );
+    // Native app flow: hand the session back over the custom scheme; no cookie, no HTML.
+    if (isApp) {
+      return res.redirect(`walkie://auth?token=${encodeURIComponent(session)}`);
+    }
     const secure = g.publicUrl.startsWith("https://") ? " Secure;" : "";
     res.setHeader(
       "Set-Cookie",

@@ -1,6 +1,7 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import Constants from "expo-constants";
 import { StatusBar } from "expo-status-bar";
+import * as WebBrowser from "expo-web-browser";
 import { useEffect, useRef, useState } from "react";
 import {
   KeyboardAvoidingView,
@@ -66,10 +67,35 @@ export default function App() {
     })();
   }, []);
 
+  // One-tap Google sign-in: open the server's /auth/login?client=app in the system browser,
+  // which returns to walkie://auth?token=<7-day session> once the @juisci.com account is picked.
+  async function signInWithGoogle() {
+    const base = serverUrl.trim().replace(/\/$/, "");
+    if (!base) return setStatus("No server URL configured");
+    // On web the app is same-origin with the server: a full-page redirect sets the cookie.
+    if (Platform.OS === "web") {
+      (globalThis as any).location.href = `${base}/auth/login`;
+      return;
+    }
+    setStatus("Opening sign-in…");
+    try {
+      const result = await WebBrowser.openAuthSessionAsync(`${base}/auth/login?client=app`, "walkie://auth");
+      if (result.type !== "success" || !result.url) return setStatus("Sign-in cancelled");
+      const t = new URL(result.url).searchParams.get("token");
+      if (!t) return setStatus("Sign-in returned no token");
+      await AsyncStorage.setMany({ fleetToken: t });
+      setToken(t);
+      setStatus("Signed in. Tap Connect.");
+    } catch (err: any) {
+      setStatus(`Sign-in failed: ${err.message}`);
+    }
+  }
+
   async function connect() {
     const base = serverUrl.trim().replace(/\/$/, "");
-    if (!base || (!token.trim() && !sessionEmail && Platform.OS !== "web")) {
-      setStatus("Server URL and token are required (on web, a session cookie also works)");
+    const webCookie = Platform.OS === "web" && !!sessionEmail;
+    if (!base || (!token.trim() && !webCookie)) {
+      setStatus("Sign in first");
       return;
     }
     await AsyncStorage.setMany({ fleetToken: token.trim() });
@@ -152,33 +178,25 @@ export default function App() {
       <Text style={styles.title}>🎙️ walkie</Text>
 
       {phase !== "live" && (
-        <KeyboardAvoidingView behavior={Platform.OS === "ios" ? "padding" : undefined} style={styles.form}>
-          <TextInput
-            style={styles.input}
-            placeholder="Server URL (https://walkie.example.com)"
-            placeholderTextColor="#5c6b78"
-            autoCapitalize="none"
-            autoCorrect={false}
-            value={serverUrl}
-            onChangeText={setServerUrl}
-          />
-          {sessionEmail && <Text style={styles.signedIn}>Signed in as {sessionEmail}</Text>}
-          <TextInput
-            style={styles.input}
-            placeholder={sessionEmail ? "Token (optional: you are signed in)" : "Fleet token"}
-            placeholderTextColor="#5c6b78"
-            secureTextEntry
-            value={token}
-            onChangeText={setToken}
-          />
-          <Pressable
-            style={[styles.button, styles.primary, phase === "connecting" && styles.disabled]}
-            disabled={phase === "connecting"}
-            onPress={connect}
-          >
-            <Text style={styles.buttonText}>{phase === "connecting" ? "Connecting…" : "Connect"}</Text>
-          </Pressable>
-        </KeyboardAvoidingView>
+        <View style={styles.form}>
+          <Text style={styles.serverNote}>{serverUrl || "no server configured"}</Text>
+          {token || (Platform.OS === "web" && sessionEmail) ? (
+            <>
+              <Text style={styles.signedIn}>{sessionEmail ? `Signed in${sessionEmail.includes("@") ? ` as ${sessionEmail}` : ""}` : "Token ready"}</Text>
+              <Pressable
+                style={[styles.button, styles.primary, phase === "connecting" && styles.disabled]}
+                disabled={phase === "connecting"}
+                onPress={connect}
+              >
+                <Text style={styles.buttonText}>{phase === "connecting" ? "Connecting…" : "Connect"}</Text>
+              </Pressable>
+            </>
+          ) : (
+            <Pressable style={[styles.button, styles.primary]} onPress={signInWithGoogle}>
+              <Text style={styles.buttonText}>Sign in with Google</Text>
+            </Pressable>
+          )}
+        </View>
       )}
 
       {phase === "live" && (
@@ -293,6 +311,7 @@ const styles = StyleSheet.create({
   transcriptText: { color: "#c9d4dc", fontSize: 15, lineHeight: 22 },
   status: { color: "#9fb0bd", fontSize: 13, paddingVertical: 16, minHeight: 40 },
   signedIn: { color: "#3ba55c", fontSize: 14, marginBottom: 12, textAlign: "center" },
+  serverNote: { color: "#5c6b78", fontSize: 12, marginBottom: 20, textAlign: "center" },
   modalBackdrop: { flex: 1, backgroundColor: "rgba(0,0,0,0.7)", alignItems: "center", justifyContent: "center" },
   card: { backgroundColor: "#181f26", borderRadius: 14, padding: 22, width: "88%", maxWidth: 420 },
   cardTitle: { color: "#e8ecef", fontSize: 17, fontWeight: "700", marginBottom: 10 },
