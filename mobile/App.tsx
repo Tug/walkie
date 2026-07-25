@@ -115,6 +115,7 @@ export default function App() {
           setTalking(true);
           setTranscript((t) => t + d);
         },
+        onUserSpeech: (text) => setTranscript((t) => `${t}You: ${text}\n\n`),
         onTurnDone: () => {
           setTalking(false);
           setTranscript((t) => `${t}\n\n`);

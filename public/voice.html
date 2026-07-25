@@ -203,6 +203,12 @@ async function connect() {
 }
 
 async function handleEvent(ev, tools) {
+  // The user's own speech, transcribed (for display + troubleshooting).
+  if (ev.type === "conversation.item.input_audio_transcription.completed" && ev.transcript) {
+    $("transcript").textContent += `You: ${ev.transcript}\n\n`;
+    $("transcript").scrollTop = $("transcript").scrollHeight;
+    log("user_speech", { text: ev.transcript });
+  }
   if (ev.type === "response.output_audio_transcript.delta" || ev.type === "response.audio_transcript.delta") {
     $("orb").classList.add("talking");
     turnText += ev.delta;

@@ -6,6 +6,8 @@ const PUBLIC_DIR = join(dirname(fileURLToPath(import.meta.url)), "..", "public")
 
 const DEFAULT_MODEL = process.env.WALKIE_REALTIME_MODEL ?? "gpt-realtime-2.1-mini";
 const VOICE = process.env.WALKIE_REALTIME_VOICE ?? "marin";
+// Transcribe the user's own speech so it shows in the app and is logged for troubleshooting.
+const TRANSCRIBE_MODEL = process.env.WALKIE_REALTIME_TRANSCRIBE ?? "gpt-4o-transcribe";
 
 const INSTRUCTIONS = `You are walkie, the voice interface to a personal fleet of coding agents running on the user's machine.
 
@@ -54,7 +56,10 @@ voiceRouter.post("/voice/secret", async (_req, res) => {
         type: "realtime",
         model: DEFAULT_MODEL,
         instructions: INSTRUCTIONS,
-        audio: { output: { voice: VOICE } },
+        audio: {
+          input: { transcription: { model: TRANSCRIBE_MODEL } },
+          output: { voice: VOICE },
+        },
       },
     }),
   });

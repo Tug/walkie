@@ -6,6 +6,7 @@ export const CONTROL_TOOLS = new Set(["spawn_worker", "send_to_agent", "reset_or
 export interface SessionCallbacks {
   onStatus: (message: string) => void;
   onTranscriptDelta: (delta: string) => void;
+  onUserSpeech?: (text: string) => void;
   onTurnDone: () => void;
   /** Resolve true to run the control-lane tool, false to deny. */
   onApproval: (name: string, args: object) => Promise<boolean>;
@@ -86,6 +87,10 @@ export async function startVoiceSession(
 
   channel.addEventListener("message", async (e: any) => {
     const ev = JSON.parse(e.data);
+    if (ev.type === "conversation.item.input_audio_transcription.completed" && ev.transcript) {
+      log("user_speech", { text: ev.transcript });
+      cb.onUserSpeech?.(ev.transcript);
+    }
     if (ev.type === "response.output_audio_transcript.delta" || ev.type === "response.audio_transcript.delta") {
       turnText += ev.delta;
       cb.onTranscriptDelta(ev.delta);
