@@ -14,6 +14,7 @@ import {
   TextInput,
   View,
 } from "react-native";
+import { setSpeaker, startAudio, stopAudio } from "./src/audio";
 import { McpClient } from "./src/mcp";
 import { startVoiceSession, type VoiceSession } from "./src/realtime";
 import { getMicStream } from "./src/rtc";
@@ -38,6 +39,7 @@ export default function App() {
   const [transcript, setTranscript] = useState("");
   const [talking, setTalking] = useState(false);
   const [muted, setMuted] = useState(false);
+  const [speaker, setSpeakerState] = useState(true);
   const [approval, setApproval] = useState<ApprovalRequest | null>(null);
   const [draft, setDraft] = useState("");
   const [sessionEmail, setSessionEmail] = useState<string | null>(null);
@@ -123,6 +125,11 @@ export default function App() {
         onApproval: (name, args) => new Promise((resolve) => setApproval({ name, args, resolve })),
       }, mic);
       setPhase("live");
+      // Route to loudspeaker (WebRTC forces the earpiece on connect); re-assert once more
+      // ~1.5s later to win the known race where WebRTC resets the audio session category.
+      startAudio();
+      setSpeaker(speaker);
+      setTimeout(() => setSpeaker(speaker), 1500);
     } catch (err: any) {
       (mic as { getTracks?: () => { stop: () => void }[] })?.getTracks?.().forEach((t) => t.stop());
       setStatus(`Error: ${err.message}`);
@@ -133,10 +140,17 @@ export default function App() {
   function hangup() {
     session.current?.hangup();
     session.current = null;
+    stopAudio();
     setPhase("setup");
     setTalking(false);
     setMuted(false);
     setStatus("Disconnected.");
+  }
+
+  function toggleSpeaker() {
+    const next = !speaker;
+    setSpeakerState(next);
+    setSpeaker(next);
   }
 
   function toggleMute() {
@@ -208,6 +222,9 @@ export default function App() {
         >
           <View style={[styles.orb, talking ? styles.orbTalking : styles.orbLive]} />
           <View style={styles.row}>
+            <Pressable style={[styles.button, styles.ghost]} onPress={toggleSpeaker}>
+              <Text style={styles.buttonText}>{speaker ? "🔊 Speaker" : "🎧 AirPods/Ear"}</Text>
+            </Pressable>
             <Pressable style={[styles.button, styles.ghost]} onPress={toggleMute}>
               <Text style={styles.buttonText}>{muted ? "Unmute" : "Mute"}</Text>
             </Pressable>

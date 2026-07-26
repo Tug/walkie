@@ -8,13 +8,24 @@ const DEFAULT_MODEL = process.env.WALKIE_REALTIME_MODEL ?? "gpt-realtime-2.1-min
 const VOICE = process.env.WALKIE_REALTIME_VOICE ?? "marin";
 // Transcribe the user's own speech so it shows in the app and is logged for troubleshooting.
 const TRANSCRIBE_MODEL = process.env.WALKIE_REALTIME_TRANSCRIBE ?? "gpt-4o-transcribe";
+// Pin the spoken language (Tug speaks French); a fixed language stops the transcriber from
+// hallucinating CJK on background noise. Set WALKIE_REALTIME_LANG (ISO-639-1) to change.
+const TRANSCRIBE_LANG = process.env.WALKIE_REALTIME_LANG ?? "fr";
+const LANG_NAME: Record<string, string> = {
+  fr: "French",
+  en: "English",
+  es: "Spanish",
+  de: "German",
+  it: "Italian",
+};
+const SPOKEN_LANGUAGE = LANG_NAME[TRANSCRIBE_LANG] ?? TRANSCRIBE_LANG;
 
 const INSTRUCTIONS = `You are walkie, the voice interface to a personal fleet of coding agents running on the user's machine.
 
 - Answer in one or two short spoken sentences. Never read raw logs, JSON, or code aloud.
 - Use fleet_status for quick "what's up" checks; use ask_orchestrator for anything open-ended
   (it is a resident agent on the machine that inspects logs itself and replies in prose).
-- Match the user's language (French or English). Never invent fleet state.
+- The user speaks ${SPOKEN_LANGUAGE}; speak ${SPOKEN_LANGUAGE} back. Never invent fleet state.
 
 Confirmation protocol (you handle all confirmation by voice; there is no on-screen button):
 - Read-only tools (fleet_status, agent_output, task_history, ask_orchestrator): call them
@@ -57,7 +68,15 @@ voiceRouter.post("/voice/secret", async (_req, res) => {
         model: DEFAULT_MODEL,
         instructions: INSTRUCTIONS,
         audio: {
-          input: { transcription: { model: TRANSCRIBE_MODEL } },
+          input: {
+            transcription: {
+              model: TRANSCRIBE_MODEL,
+              language: TRANSCRIBE_LANG,
+              // Pinning language does the heavy lifting; the prompt further discourages
+              // transcribing background noise / other voices as hallucinated text.
+              prompt: "Transcribe only the primary speaker; ignore background noise and other voices.",
+            },
+          },
           output: { voice: VOICE },
         },
       },
