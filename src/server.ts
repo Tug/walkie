@@ -197,7 +197,13 @@ function buildServer(): McpServer {
           model: z
             .string()
             .optional()
-            .describe("Model, esp. for opencode as provider/model (e.g. moonshot/kimi-k3)"),
+            .describe(
+              "Model for the worker. For a claude worker: an alias for the latest model ('opus' for " +
+                "Opus 5, 'sonnet', 'fable') or a full id ('claude-opus-5'). For opencode: provider/model " +
+                "(e.g. 'moonshot/kimi-k3'). For codex: the codex model name. Omit to use the agent's " +
+                "default (claude uses the subscription default). Also changeable after launch by sending " +
+                "'/model opus' to a claude worker via send_to_agent.",
+            ),
           allowMainPush: z.boolean().optional().describe("Let the worker push the main branch directly"),
           allowMerge: z.boolean().optional().describe("Let the worker merge PRs"),
           allowForcePush: z.boolean().optional().describe("Let the worker force-push"),
