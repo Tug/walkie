@@ -42,6 +42,13 @@ export function sanitize(text: string): string {
   return text.replace(/\x1b\[[0-9;]*[A-Za-z]/g, "").replace(/[\x00-\x08\x0b-\x1f\x7f]/g, "");
 }
 
+/** Send raw key names to the pane (no Escape preamble, no chunking, no verify). Use for menu
+ * selections like the first-run trust prompt: sendKeysRobust leads with Escape to clear partial
+ * input, but the trust dialog reads Escape as "cancel" and EXITS the CLI, killing the worker. */
+export async function sendKeysRaw(target: string, keys: string[]): Promise<void> {
+  await tmux(["send-keys", "-t", target, ...keys]);
+}
+
 export async function sendKeysRobust(target: string, text: string): Promise<void> {
   const clean = sanitize(text).trim();
   if (!clean) throw new Error("Refusing to send empty message");

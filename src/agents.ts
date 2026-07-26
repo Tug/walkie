@@ -17,9 +17,22 @@ export const isAgentKind = (v: string): v is AgentKind => (AGENT_KINDS as string
 const SRC = dirname(fileURLToPath(import.meta.url));
 const sh = (s: string) => `'${s.replace(/'/g, "'\\''")}'`; // single-quote for the shell
 
+/** Normalize a claude --model value so common spoken/typed forms work. The CLI accepts a bare
+ * alias for the latest model ('opus', 'sonnet', 'haiku', 'fable') or a full id ('claude-opus-5').
+ * A versioned-but-unprefixed form like 'opus-5' or 'opus 5' is NOT valid on its own, so map it to
+ * the full id 'claude-opus-5'. Anything else is left untouched (the CLI will reject a bad name). */
+export function normalizeClaudeModel(model: string): string {
+  const s = model.trim().toLowerCase().replace(/\s+/g, "-");
+  if (/^(opus|sonnet|haiku|fable)$/.test(s)) return s; // valid latest-model alias
+  if (s.startsWith("claude-")) return s; // already a full id
+  const versioned = s.match(/^(opus|sonnet|haiku|fable)-?([\d][\d.-]*)$/);
+  if (versioned) return `claude-${versioned[1]}-${versioned[2]}`;
+  return model;
+}
+
 /** Default model per agent when the caller doesn't specify one. Claude uses the subscription. */
 export function resolveModel(kind: AgentKind, model?: string): string | undefined {
-  if (model) return model;
+  if (model) return kind === "claude" ? normalizeClaudeModel(model) : model;
   if (kind === "opencode") return "anthropic/claude-sonnet-4-5"; // safe default; override per task
   return undefined; // claude: subscription default; codex: config default
 }
@@ -49,9 +62,18 @@ export function agentSignals(kind: AgentKind): AgentSignals {
   switch (kind) {
     case "claude":
       return {
-        ready: /❯|Try "|Welcome/,
+        // Match the input box / greeting, but NOT the "❯" that also marks the trust menu's
+        // selected option — otherwise the primer thinks the worker is ready and fires the task
+        // text into the trust selector, derailing (and often exiting) the worker.
+        ready: /Try "|Welcome|shortcuts|for shortcuts/,
         working: /esc to interrupt/,
-        trust: { pattern: /Do you trust the files in this folder\?/, send: "1" },
+        // Wording drifts across CLI versions; match the current "Quick safety check" screen and
+        // the older phrasing. send "1" selects "Yes, I trust this folder".
+        trust: {
+          pattern:
+            /Do you trust the files in this folder\?|Is this a project you created or one you trust|trust this folder/i,
+          send: "1",
+        },
       };
     case "opencode":
       return { ready: /❯|opencode|\bready\b/i, working: /working|thinking|running/i };
@@ -69,7 +91,17 @@ async function prepareClaude(ctx: AgentContext, bin: string): Promise<LaunchPlan
     JSON.stringify(
       {
         permissions: { defaultMode: "dontAsk" },
-        hooks: { PreToolUse: { type: "command", command: `bun ${join(SRC, "hook.ts")}` } },
+        // PreToolUse must be an ARRAY of matchers, each with its own hooks array. The older
+        // object form is silently ignored by current Claude Code, which would leave the worker
+        // UNGATED. Match Bash (the hook allows every other tool itself); gitguard is the gate.
+        hooks: {
+          PreToolUse: [
+            {
+              matcher: "Bash",
+              hooks: [{ type: "command", command: `bun ${join(SRC, "hook.ts")}` }],
+            },
+          ],
+        },
       },
       null,
       2,

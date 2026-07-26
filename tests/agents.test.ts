@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { access, mkdtemp, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { agentSignals, prepareAgent, resolveModel } from "../src/agents.js";
+import { agentSignals, normalizeClaudeModel, prepareAgent, resolveModel } from "../src/agents.js";
 import { DEFAULT_CAPS } from "../src/gitguard.js";
 
 const ctx = async () => ({
@@ -22,6 +22,28 @@ describe("resolveModel", () => {
     expect(resolveModel("claude")).toBeUndefined(); // subscription default
     expect(resolveModel("codex")).toBeUndefined();
   });
+
+  test("normalizes claude model names so spoken/typed forms resolve", () => {
+    // Valid aliases and full ids pass through (lowercased).
+    expect(resolveModel("claude", "opus")).toBe("opus");
+    expect(resolveModel("claude", "claude-opus-5")).toBe("claude-opus-5");
+    // The invalid-but-common versioned form is repaired to the full id.
+    expect(resolveModel("claude", "opus-5")).toBe("claude-opus-5");
+    expect(resolveModel("claude", "opus 5")).toBe("claude-opus-5");
+    expect(resolveModel("claude", "Opus5")).toBe("claude-opus-5");
+    expect(resolveModel("claude", "sonnet-4-5")).toBe("claude-sonnet-4-5");
+    // Non-claude agents are left exactly as given.
+    expect(resolveModel("opencode", "opus-5")).toBe("opus-5");
+  });
+});
+
+describe("normalizeClaudeModel", () => {
+  test("aliases pass, versioned forms are prefixed, unknowns untouched", () => {
+    expect(normalizeClaudeModel("opus")).toBe("opus");
+    expect(normalizeClaudeModel("opus-5")).toBe("claude-opus-5");
+    expect(normalizeClaudeModel("claude-sonnet-4-5")).toBe("claude-sonnet-4-5");
+    expect(normalizeClaudeModel("gpt-5.5")).toBe("gpt-5.5"); // not a claude family name
+  });
 });
 
 describe("prepareAgent — claude", () => {
@@ -32,7 +54,10 @@ describe("prepareAgent — claude", () => {
     expect(plan.command).toContain("dontAsk");
     expect(await exists(join(c.worktree, ".walkie-settings.json"))).toBe(true);
     const s = JSON.parse(await readFile(join(c.worktree, ".walkie-settings.json"), "utf8"));
-    expect(s.hooks.PreToolUse.command).toContain("hook.ts");
+    // PreToolUse must be an array of matchers (the object form is silently ignored → ungated).
+    expect(Array.isArray(s.hooks.PreToolUse)).toBe(true);
+    expect(s.hooks.PreToolUse[0].matcher).toBe("Bash");
+    expect(s.hooks.PreToolUse[0].hooks[0].command).toContain("hook.ts");
   });
 });
 

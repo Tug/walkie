@@ -12,7 +12,7 @@ import { promisify } from "node:util";
 import { type AgentKind, agentSignals, prepareAgent, resolveModel } from "./agents.js";
 import { loadCommandPolicy } from "./command-policy.js";
 import type { WorkerCaps } from "./gitguard.js";
-import { capturePane, sendKeysRobust } from "./tmux.js";
+import { capturePane, sendKeysRaw, sendKeysRobust } from "./tmux.js";
 
 const exec = promisify(execFile);
 const ROOT = join(homedir(), ".fleet-orchestrator", "cli");
@@ -325,7 +325,9 @@ async function primeAndSend(
       if (!(await tmuxHas(session))) return; // killed before it was primed
       const pane = await capturePane(target, 40);
       if (sig.trust?.pattern.test(pane)) {
-        await sendKeysRobust(target, sig.trust.send);
+        // Raw send (digit + Enter), NOT sendKeysRobust: its leading Escape would cancel the
+        // trust dialog and exit the CLI. Selecting the trust option keeps the worker alive.
+        await sendKeysRaw(target, [sig.trust.send, "Enter"]);
         continue;
       }
       if (sig.ready.test(pane) || sig.working.test(pane)) break;
