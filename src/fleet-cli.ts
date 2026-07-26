@@ -5,7 +5,7 @@
 // coordinator; there is no supervisor and no merge-queue.
 
 import { execFile } from "node:child_process";
-import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { access, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
@@ -107,13 +107,48 @@ async function defaultOwner(): Promise<string | undefined> {
   }
 }
 
+/** Resolve a repo reference, probing GitHub for a bare name so it lands on the owner that actually
+ * has it (e.g. `smoothie` → JuisciAdmin/smoothie, not Tug/smoothie). URLs and owner/name pass
+ * straight through. Candidate owners for a bare name: WALKIE_DEFAULT_OWNER / gh login, then each
+ * owner in WALKIE_OWNERS (comma-separated). Falls back to the plain default-owner resolution when
+ * no candidate has the repo (so greenfield / offline still work). */
+async function resolveRepoRef(ref: string): Promise<{ name: string; url: string }> {
+  const owner = await defaultOwner();
+  const bare =
+    !/:\/\//.test(ref) && !/^[^/]+@[^/]+:/.test(ref) && !ref.endsWith(".git") && !ref.includes("/");
+  if (bare) {
+    const extra = (process.env.WALKIE_OWNERS ?? "")
+      .split(",")
+      .map((o) => o.trim())
+      .filter(Boolean);
+    const candidates = [...new Set([owner, ...extra].filter(Boolean))] as string[];
+    for (const cand of candidates) {
+      const exists = await sh("gh", ["repo", "view", `${cand}/${ref}`, "--json", "name"], {
+        timeoutMs: 15_000,
+      }).then(
+        () => true,
+        () => false,
+      );
+      if (exists) return resolveRepo(`${cand}/${ref}`);
+    }
+  }
+  return resolveRepo(ref, owner);
+}
+
 async function ensureClone(url: string, name: string): Promise<{ dir: string; base: string }> {
   const dir = join(REPOS, name);
   await mkdir(REPOS, { recursive: true });
-  try {
-    await readFile(join(dir, "HEAD"), "utf8");
-    await sh("git", ["fetch", "origin", "--prune"], { cwd: dir });
-  } catch {
+  // A repo is cloned once and kept; every worker just adds a worktree off it. Detect an
+  // existing clone by its .git (NOT dir/HEAD — that only exists in bare repos), so we reuse
+  // it and fetch, instead of trying to clone into a non-empty dir.
+  const cloned = await access(join(dir, ".git")).then(
+    () => true,
+    () => false,
+  );
+  if (cloned) {
+    await sh("git", ["fetch", "origin", "--prune"], { cwd: dir }).catch(() => {});
+  } else {
+    await rm(dir, { recursive: true, force: true }).catch(() => {}); // clear any partial/failed clone
     await sh("git", ["clone", url, dir], { timeoutMs: 600_000 });
   }
   // Detect the remote's default branch (origin/HEAD → e.g. origin/main).
@@ -204,7 +239,10 @@ export async function spawnCliWorker(
 ): Promise<SpawnResult> {
   const agent: AgentKind = opts.agent ?? "claude";
   const model = resolveModel(agent, opts.model);
-  const { name: repoName, url: repoUrl } = resolveRepo(repoRef, await defaultOwner());
+  // Greenfield repos don't exist yet, so don't probe GitHub for them; plain resolution is right.
+  const { name: repoName, url: repoUrl } = opts.newRepo
+    ? resolveRepo(repoRef, await defaultOwner())
+    : await resolveRepoRef(repoRef);
   const s = await loadState();
   const seed = Object.keys(s.workers).length + 1;
   const name = workerName(seed);
@@ -300,8 +338,13 @@ async function primeAndSend(
   }
 }
 
+/** Look up a worker by its name, tolerating the `walkie-<name>` tmux-session form. */
+function findWorker(s: FleetState, name: string): CliWorker | undefined {
+  return s.workers[name] ?? s.workers[name.replace(/^walkie-/, "")];
+}
+
 export async function getCliWorker(name: string): Promise<CliWorker | undefined> {
-  return (await loadState()).workers[name];
+  return findWorker(await loadState(), name);
 }
 
 export async function listCliWorkers(repo?: string): Promise<Array<CliWorker & { status: string }>> {
@@ -328,25 +371,23 @@ export async function listCliWorkers(repo?: string): Promise<Array<CliWorker & {
 }
 
 export async function cliWorkerOutput(name: string, lines = 100): Promise<string> {
-  const s = await loadState();
-  const w = s.workers[name];
+  const w = findWorker(await loadState(), name);
   if (!w) return `No worker "${name}".`;
-  if (!(await tmuxHas(w.tmuxSession))) return `Worker "${name}" session has ended.`;
+  if (!(await tmuxHas(w.tmuxSession))) return `Worker "${w.name}" session has ended.`;
   return capturePane(`${w.tmuxSession}:0`, lines);
 }
 
 export async function messageCliWorker(name: string, text: string): Promise<string> {
-  const s = await loadState();
-  const w = s.workers[name];
+  const w = findWorker(await loadState(), name);
   if (!w) return `No worker "${name}".`;
-  if (!(await tmuxHas(w.tmuxSession))) return `Worker "${name}" session has ended; cannot message it.`;
+  if (!(await tmuxHas(w.tmuxSession))) return `Worker "${w.name}" session has ended; cannot message it.`;
   await sendKeysRobust(`${w.tmuxSession}:0`, text);
-  return `Sent to ${name}.`;
+  return `Sent to ${w.name}.`;
 }
 
 export async function killCliWorker(name: string): Promise<string> {
   const s = await loadState();
-  const w = s.workers[name];
+  const w = findWorker(s, name);
   if (!w) return `No worker "${name}".`;
   await sh("tmux", ["kill-session", "-t", w.tmuxSession]).catch(() => {});
   const clone = join(REPOS, w.repo);
@@ -354,7 +395,7 @@ export async function killCliWorker(name: string): Promise<string> {
     await rm(w.worktree, { recursive: true, force: true }).catch(() => {});
   });
   await sh("git", ["branch", "-D", w.branch], { cwd: clone }).catch(() => {});
-  delete s.workers[name];
+  delete s.workers[w.name];
   await saveState(s);
-  return `Killed worker ${name} (tmux session + worktree + local branch ${w.branch}).`;
+  return `Killed worker ${w.name} (tmux session + worktree + local branch ${w.branch}).`;
 }

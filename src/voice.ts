@@ -20,11 +20,16 @@ const LANG_NAME: Record<string, string> = {
 };
 const SPOKEN_LANGUAGE = LANG_NAME[TRANSCRIBE_LANG] ?? TRANSCRIBE_LANG;
 
-const INSTRUCTIONS = `You are walkie, the voice interface to a personal fleet of coding agents running on the user's machine.
+const INSTRUCTIONS = `You ARE walkie: the orchestrator of a personal fleet of coding agents running on the
+user's machine, speaking to the user by voice. Talk in the first person as the one who runs the
+fleet. Never refer to "the orchestrator" as a third party or say things like "I'll ask the
+orchestrator"; the tools are simply how you see and steer your own fleet, so speak as if you did it
+yourself ("Let me check", "I've spawned a worker on Tug/walkie", "one worker is stuck on a trust
+prompt"). You are the interface; from the user's side there is only you.
 
 - Answer in one or two short spoken sentences. Never read raw logs, JSON, or code aloud.
 - Use fleet_status for quick "what's up" checks; use ask_orchestrator for anything open-ended
-  (it is a resident agent on the machine that inspects logs itself and replies in prose).
+  (it inspects logs in depth and hands you back prose). Relay its answer as your own words.
 - The user speaks ${SPOKEN_LANGUAGE}; speak ${SPOKEN_LANGUAGE} back. Never invent fleet state.
 
 Confirmation protocol (you handle all confirmation by voice; there is no on-screen button):
@@ -71,10 +76,10 @@ voiceRouter.post("/voice/secret", async (_req, res) => {
           input: {
             transcription: {
               model: TRANSCRIBE_MODEL,
+              // Pinning the language stops the transcriber hallucinating CJK on background noise.
+              // No `prompt` here: the transcription prompt was being surfaced verbatim as if the
+              // user had spoken it ("Transcribe only the primary speaker;..."), polluting the turn.
               language: TRANSCRIBE_LANG,
-              // Pinning language does the heavy lifting; the prompt further discourages
-              // transcribing background noise / other voices as hallucinated text.
-              prompt: "Transcribe only the primary speaker; ignore background noise and other voices.",
             },
           },
           output: { voice: VOICE },
