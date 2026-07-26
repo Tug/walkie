@@ -4,6 +4,7 @@ import { StatusBar } from "expo-status-bar";
 import * as WebBrowser from "expo-web-browser";
 import { useEffect, useRef, useState } from "react";
 import {
+  AppState,
   KeyboardAvoidingView,
   Modal,
   Platform,
@@ -45,6 +46,13 @@ export default function App() {
   const [sessionEmail, setSessionEmail] = useState<string | null>(null);
   const session = useRef<VoiceSession | null>(null);
   const scroll = useRef<ScrollView>(null);
+  // wantLive: the user intends an active session (Connect pressed, not hung up). appActive: current
+  // foreground state. busy: a connect is in flight (guards against overlapping reconnects). connectRef
+  // holds the latest connect() so the AppState listener never calls a stale closure.
+  const wantLive = useRef(false);
+  const appActive = useRef(true);
+  const busy = useRef(false);
+  const connectRef = useRef<() => Promise<void>>(async () => {});
 
   useEffect(() => {
     (async () => {
@@ -100,6 +108,12 @@ export default function App() {
       setStatus("Sign in first");
       return;
     }
+    if (busy.current) return; // a connect/reconnect is already in flight
+    busy.current = true;
+    wantLive.current = true;
+    // Drop any stale session (e.g. a dead one we're replacing on reconnect) before opening a new one.
+    session.current?.hangup();
+    session.current = null;
     await AsyncStorage.setMany({ fleetToken: token.trim() });
     setPhase("connecting");
     let mic: unknown;
@@ -123,6 +137,7 @@ export default function App() {
           setTranscript((t) => `${t}\n\n`);
         },
         onApproval: (name, args) => new Promise((resolve) => setApproval({ name, args, resolve })),
+        onClosed: handleClosed,
       }, mic);
       setPhase("live");
       // Route to loudspeaker (WebRTC forces the earpiece on connect); re-assert once more
@@ -134,10 +149,44 @@ export default function App() {
       (mic as { getTracks?: () => { stop: () => void }[] })?.getTracks?.().forEach((t) => t.stop());
       setStatus(`Error: ${err.message}`);
       setPhase("setup");
+    } finally {
+      busy.current = false;
+    }
+  }
+  connectRef.current = connect;
+
+  // Called when the WebRTC connection drops (typically iOS suspending the backgrounded app).
+  // If the user still wants a live session, reconnect right away when in the foreground; when
+  // backgrounded, defer to the AppState listener, which reconnects on the next resume.
+  function handleClosed(reason: string) {
+    session.current = null;
+    if (!wantLive.current) return;
+    if (appActive.current) {
+      setStatus("Connection dropped. Reconnecting…");
+      void connectRef.current();
+    } else {
+      setPhase("connecting");
+      setStatus("Connection dropped while in background. Reopen to reconnect.");
     }
   }
 
+  // Reopening the app after iOS suspended it leaves a dead connection that still shows "Live".
+  // On every return to the foreground, if the session isn't actually alive, reconnect a fresh one.
+  useEffect(() => {
+    const sub = AppState.addEventListener("change", (next) => {
+      appActive.current = next === "active";
+      if (next === "active" && wantLive.current && !busy.current) {
+        if (!(session.current?.isAlive?.() ?? false)) {
+          setStatus("Reconnecting…");
+          void connectRef.current();
+        }
+      }
+    });
+    return () => sub.remove();
+  }, []);
+
   function hangup() {
+    wantLive.current = false;
     session.current?.hangup();
     session.current = null;
     stopAudio();

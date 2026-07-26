@@ -10,6 +10,9 @@ export interface SessionCallbacks {
   onTurnDone: () => void;
   /** Resolve true to run the control-lane tool, false to deny. */
   onApproval: (name: string, args: object) => Promise<boolean>;
+  /** The peer connection or data channel dropped (e.g. iOS suspended the backgrounded app).
+   * Fires at most once; the session is dead after this and must be replaced by a new one. */
+  onClosed?: (reason: string) => void;
 }
 
 export interface VoiceSession {
@@ -19,6 +22,9 @@ export interface VoiceSession {
   sendText: (text: string) => void;
   /** Send an image (data URL). Keep under ~200KB: data channel message limit. */
   sendImage: (dataUrl: string) => void;
+  /** False once the connection has dropped (or been hung up), so the UI can reconnect instead
+   * of showing a stale "Live" over a dead pipe. */
+  isAlive: () => boolean;
 }
 
 export async function startVoiceSession(
@@ -59,6 +65,26 @@ export async function startVoiceSession(
   for (const track of mic.getTracks()) pc.addTrack(track, mic);
   attachRemoteAudio(pc);
 
+  // Surface connection death exactly once. When iOS suspends the backgrounded app the peer
+  // connection and data channel drop; without this the UI would keep showing "Live" over a
+  // pipe that silently swallows the mic and never replies.
+  const pcAny = pc as any;
+  let closed = false;
+  const fireClosed = (reason: string) => {
+    if (closed) return;
+    closed = true;
+    log("connection_closed", { reason });
+    cb.onClosed?.(reason);
+  };
+  const deadState = (st: string) => st === "failed" || st === "closed" || st === "disconnected";
+  pcAny.addEventListener?.("connectionstatechange", () => {
+    if (deadState(pcAny.connectionState)) fireClosed(`connection ${pcAny.connectionState}`);
+  });
+  pcAny.addEventListener?.("iceconnectionstatechange", () => {
+    const st = pcAny.iceConnectionState;
+    if (st === "failed" || st === "closed") fireClosed(`ice ${st}`);
+  });
+
   const dc = pc.createDataChannel("oai-events");
   // react-native-webrtc's RTCDataChannel extends event-target-shim, whose typings
   // don't surface addEventListener through this tsconfig; runtime API is standard.
@@ -84,6 +110,7 @@ export async function startVoiceSession(
     );
     cb.onStatus("Live. Say something.");
   });
+  channel.addEventListener("close", () => fireClosed("data channel closed"));
 
   channel.addEventListener("message", async (e: any) => {
     const ev = JSON.parse(e.data);
@@ -148,8 +175,16 @@ export async function startVoiceSession(
     },
     hangup: () => {
       log("session_ended");
+      closed = true; // an intentional teardown must not be reported as a dropped connection
       for (const track of mic.getTracks()) track.stop();
       pc.close();
+    },
+    isAlive: () => {
+      if (closed) return false;
+      const st = pcAny.connectionState ?? pcAny.iceConnectionState;
+      // Treat an unknown/undefined state as alive: some react-native-webrtc builds don't expose
+      // connectionState, and a freshly-open session is what we care about most.
+      return !st || !deadState(st);
     },
     sendText: (text: string) => {
       log("user_text", { text });
