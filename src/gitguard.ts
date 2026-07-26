@@ -60,19 +60,25 @@ export function classifyWorkerCommand(cmd: string, caps: WorkerCaps): Decision {
   const bin = t[0];
   if (bin !== "git" && bin !== "gh") return ALLOW; // confined by worktree cwd
 
-  const rest = t.slice(1);
-  const sub = rest[0];
+  // git and gh both accept GLOBAL OPTIONS before the subcommand, so a naive `sub = rest[0]`
+  // lets `git -c x=y push`, `git -C /dir push`, and `gh -R owner/repo pr merge` slip past every
+  // gate below (the subcommand token is shifted). Strip the leading options first, and deny the
+  // ones that escape the worktree (git -C / --git-dir / --work-tree) or disable hooks
+  // (git -c core.hooksPath=...) — the same class of risk as --no-verify.
+  const stripped = stripGlobals(bin, t.slice(1));
+  if (stripped.deny) return DENY(stripped.deny);
+  const { sub, args } = stripped;
 
   if (bin === "gh") {
-    if (sub === "pr" && rest[1] === "merge") {
+    if (sub === "pr" && args[0] === "merge") {
       return caps.allowMerge
         ? ALLOW
         : DENY("merging is not authorized for this worker (ask explicitly to enable)");
     }
-    if (sub === "repo" && (rest[1] === "delete" || rest[1] === "archive"))
+    if (sub === "repo" && (args[0] === "delete" || args[0] === "archive"))
       return DENY("repo mutation not allowed");
     if (sub === "api") {
-      const joined = rest.join(" ");
+      const joined = args.join(" ");
       if ((/\/merges?\b/.test(joined) || /pulls\/\d+\/merge/.test(joined)) && !caps.allowMerge) {
         return DENY("merging via gh api is not authorized for this worker");
       }
@@ -82,7 +88,7 @@ export function classifyWorkerCommand(cmd: string, caps: WorkerCaps): Decision {
 
   // git
   if (sub === "push") {
-    const flags = rest.slice(1);
+    const flags = args;
     if (flags.some((f) => f === "--force" || f === "-f" || f.startsWith("--force-with-lease"))) {
       if (!caps.allowForcePush)
         return DENY("force-push is not authorized for this worker (ask explicitly to enable)");
@@ -112,11 +118,53 @@ export function classifyWorkerCommand(cmd: string, caps: WorkerCaps): Decision {
     return ALLOW;
   }
 
-  if (sub === "remote" && (rest[1] === "set-url" || rest[1] === "add" || rest[1] === "remove")) {
+  if (sub === "remote" && (args[0] === "set-url" || args[0] === "add" || args[0] === "remove")) {
     return DENY("changing git remotes is not allowed");
   }
-  if (sub === "config" && rest.some((a) => a.startsWith("remote.") || a.startsWith("url."))) {
+  if (sub === "config" && args.some((a) => a.startsWith("remote.") || a.startsWith("url."))) {
     return DENY("changing remote git config is not allowed");
   }
   return ALLOW;
+}
+
+/** Split leading global options (those before the subcommand) from `rest`, returning the real
+ * subcommand + its args. git/gh place options like `-c`, `-C`, `--git-dir`, `-R`/`--repo` ahead
+ * of the subcommand; some take the FOLLOWING token as their value (unless written `--opt=value`).
+ * We deny git's directory-redirection options (they operate outside the confined worktree) and
+ * `-c core.hooksPath=` (it bypasses the repo's hooks, like --no-verify). */
+function stripGlobals(
+  bin: string,
+  rest: string[],
+): { deny?: string; sub: string | undefined; args: string[] } {
+  const valueOpts =
+    bin === "git"
+      ? new Set(["-C", "-c", "--git-dir", "--work-tree", "--namespace", "--super-prefix", "--config-env"])
+      : new Set(["-R", "--repo"]);
+  let i = 0;
+  while (i < rest.length && rest[i].startsWith("-")) {
+    const tok = rest[i];
+    const eq = tok.indexOf("=");
+    const name = eq === -1 ? tok : tok.slice(0, eq);
+    const inlineVal = eq === -1 ? undefined : tok.slice(eq + 1);
+    const takesValue = valueOpts.has(name);
+    const val = inlineVal ?? (takesValue ? rest[i + 1] : undefined);
+    if (bin === "git") {
+      if (name === "-C" || name === "--git-dir" || name === "--work-tree") {
+        return {
+          deny: `git ${name} (operating outside the worktree) is not allowed`,
+          sub: undefined,
+          args: [],
+        };
+      }
+      if (name === "-c" && /^core\.hooksPath=/i.test(val ?? "")) {
+        return {
+          deny: "git -c core.hooksPath is not allowed (it would bypass the repo's hooks)",
+          sub: undefined,
+          args: [],
+        };
+      }
+    }
+    i += takesValue && inlineVal === undefined ? 2 : 1;
+  }
+  return { sub: rest[i], args: rest.slice(i + 1) };
 }

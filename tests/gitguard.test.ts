@@ -49,4 +49,23 @@ describe("worker git guard — capability based", () => {
     noW("git push origin main; gh pr merge 1", all); // shell chaining
     noW("git push --all origin", all);
   });
+
+  test("global options before the subcommand cannot bypass the gates", () => {
+    // Naive `sub = rest[0]` used to read "-c"/"-C"/"-R" as the subcommand and skip the gate.
+    noW("git -c user.email=x@y.z push origin main"); // push-to-main still caught
+    noW("git -c a=b -c c=d push origin main"); // multiple globals
+    noW("gh -R owner/repo pr merge 1"); // merge still caught
+    noW("gh --repo owner/repo pr merge 1");
+    noW("gh -R=owner/repo pr merge 1"); // inline value form
+    // Directory redirection escapes the worktree entirely: denied outright.
+    noW("git -C /some/other/repo push origin feature");
+    noW("git --git-dir=/other/.git push origin feature");
+    noW("git --work-tree=/other push origin feature");
+    // -c core.hooksPath=... disables hooks like --no-verify: denied.
+    noW("git -c core.hooksPath=/dev/null push origin feature");
+    // A benign global option before an allowed push still works.
+    okW("git -c user.email=x@y.z push origin feat/x");
+    okW("gh -R owner/repo pr create --fill");
+    okW("gh -R owner/repo pr merge 1", { ...def, allowMerge: true });
+  });
 });
