@@ -8,11 +8,22 @@
 import { chmod, mkdir, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { z } from "zod";
 import type { WorkerCaps } from "./gitguard.js";
 
-export type AgentKind = "claude" | "opencode" | "codex";
-export const AGENT_KINDS: AgentKind[] = ["claude", "opencode", "codex"];
-export const isAgentKind = (v: string): v is AgentKind => (AGENT_KINDS as string[]).includes(v);
+// Single source of truth for the finite agent-CLI set: the zod schema is the authority, and the
+// type + the runtime list are derived from it (no hand-kept parallel copies to drift). Reuse
+// AgentKindSchema directly in every tool inputSchema so the enum is exposed to MCP clients.
+export const AgentKindSchema = z.enum(["claude", "opencode", "codex"]);
+export type AgentKind = z.infer<typeof AgentKindSchema>;
+export const AGENT_KINDS = AgentKindSchema.options;
+export const isAgentKind = (v: string): v is AgentKind => AgentKindSchema.safeParse(v).success;
+
+// The finite set of claude model aliases the CLI accepts (each = "latest of that family"). A full
+// id like "claude-opus-5" is also valid but open-ended, so the model field stays a string; these
+// aliases drive normalizeClaudeModel and are surfaced to the orchestrator's routing guidance.
+export const CLAUDE_MODEL_ALIASES = ["opus", "sonnet", "haiku", "fable"] as const;
+export type ClaudeModelAlias = (typeof CLAUDE_MODEL_ALIASES)[number];
 
 const SRC = dirname(fileURLToPath(import.meta.url));
 const sh = (s: string) => `'${s.replace(/'/g, "'\\''")}'`; // single-quote for the shell
@@ -23,9 +34,10 @@ const sh = (s: string) => `'${s.replace(/'/g, "'\\''")}'`; // single-quote for t
  * the full id 'claude-opus-5'. Anything else is left untouched (the CLI will reject a bad name). */
 export function normalizeClaudeModel(model: string): string {
   const s = model.trim().toLowerCase().replace(/\s+/g, "-");
-  if (/^(opus|sonnet|haiku|fable)$/.test(s)) return s; // valid latest-model alias
+  const family = CLAUDE_MODEL_ALIASES.join("|"); // opus|sonnet|haiku|fable
+  if (new RegExp(`^(${family})$`).test(s)) return s; // valid latest-model alias
   if (s.startsWith("claude-")) return s; // already a full id
-  const versioned = s.match(/^(opus|sonnet|haiku|fable)-?([\d][\d.-]*)$/);
+  const versioned = s.match(new RegExp(`^(${family})-?([\\d][\\d.-]*)$`));
   if (versioned) return `claude-${versioned[1]}-${versioned[2]}`;
   return model;
 }

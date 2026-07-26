@@ -8,10 +8,11 @@
 // at long-horizon terminal/agentic, security, dev tooling; weaker on web/dataviz/breadth;
 // token-hungry) informs when opencode+kimi is worth the API spend.
 
+import type { AgentKind } from "./agents.js";
 import type { RunRecord } from "./memory.js";
 
 export interface AgentSuggestion {
-  agent: "claude" | "opencode" | "codex";
+  agent: AgentKind;
   model?: string;
   rationale: string;
 }
@@ -67,10 +68,10 @@ export function suggestAgent(task: string, recent: RunRecord[]): AgentSuggestion
   // Memory first: among similar past runs that went well, pick the most common agent+model.
   const similar = recent.filter((r) => wentWell(r) && sharedTerms(task, r.task) >= 2).slice(0, 20);
   if (similar.length > 0) {
-    const tally = new Map<string, { agent: AgentSuggestion["agent"]; model?: string; n: number }>();
+    const tally = new Map<string, { agent: AgentKind; model?: string; n: number }>();
     for (const r of similar) {
       const key = `${r.agent}:${r.model ?? ""}`;
-      const cur = tally.get(key) ?? { agent: r.agent as AgentSuggestion["agent"], model: r.model, n: 0 };
+      const cur = tally.get(key) ?? { agent: r.agent, model: r.model, n: 0 };
       cur.n += 1;
       tally.set(key, cur);
     }

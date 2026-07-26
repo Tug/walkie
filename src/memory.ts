@@ -6,6 +6,7 @@ import { randomUUID } from "node:crypto";
 import { mkdir, readdir, readFile, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import type { AgentKind } from "./agents.js";
 
 const memDir = (): string =>
   process.env.WALKIE_MEMORY_DIR ?? join(homedir(), ".fleet-orchestrator", "memory");
@@ -21,7 +22,7 @@ export interface RunRecord {
   ts: string; // ISO
   repo: string;
   worker: string;
-  agent: string;
+  agent: AgentKind;
   model?: string;
   task: string;
   branch?: string;

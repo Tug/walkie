@@ -7,7 +7,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import express from "express";
 import { z } from "zod";
-import { AGENT_KINDS, isAgentKind } from "./agents.js";
+import { AgentKindSchema } from "./agents.js";
 import { authMiddleware, loadAuthConfig, registerAuthRoutes } from "./auth.js";
 import { convertSession, listRecentSessions } from "./convert/index.js";
 import {
@@ -140,7 +140,7 @@ function buildServer(): McpServer {
         "(Native auto-resume file writing is a separate, live-validated step.)",
       inputSchema: {
         session: z.string().describe("Source session id or .jsonl path (from list_sessions)"),
-        target: z.enum(["claude", "codex", "opencode"]),
+        target: AgentKindSchema.describe("Agent CLI to produce the handoff for"),
       },
     },
     async ({ session, target }) => {
@@ -193,7 +193,7 @@ function buildServer(): McpServer {
             .describe(
               "Create a new private GitHub repo (owner/name or name) and scaffold it, instead of cloning",
             ),
-          agent: z.enum(["claude", "opencode", "codex"]).optional().describe("Agent CLI (default claude)"),
+          agent: AgentKindSchema.optional().describe("Agent CLI (default claude)"),
           model: z
             .string()
             .optional()
@@ -214,12 +214,7 @@ function buildServer(): McpServer {
         },
       },
       async ({ repo, task, newRepo, agent, model, allowMainPush, allowMerge, allowForcePush, consent }) => {
-        if (agent && !isAgentKind(agent)) {
-          return {
-            isError: true,
-            content: [{ type: "text", text: `agent must be one of ${AGENT_KINDS.join(", ")}` }],
-          };
-        }
+        // `agent` is already constrained to AgentKind by AgentKindSchema; no runtime re-check needed.
         const wantsElevated = Boolean(allowMainPush || allowMerge || allowForcePush);
         if (wantsElevated && !consentValid(consent)) {
           return {

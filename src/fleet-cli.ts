@@ -38,6 +38,10 @@ interface FleetState {
   workers: Record<string, CliWorker>;
 }
 
+/** The finite live states a worker can be in (from its tmux pane). Union, not string, so every
+ * consumer switches exhaustively and a new state can't be introduced untyped. */
+export type WorkerStatus = "working" | "idle" | "blocked:trust" | "ended";
+
 async function sh(
   bin: string,
   args: string[],
@@ -121,7 +125,7 @@ async function resolveRepoRef(ref: string): Promise<{ name: string; url: string 
       .split(",")
       .map((o) => o.trim())
       .filter(Boolean);
-    const candidates = [...new Set([owner, ...extra].filter(Boolean))] as string[];
+    const candidates = [...new Set([owner, ...extra].filter((o): o is string => Boolean(o)))];
     for (const cand of candidates) {
       const exists = await sh("gh", ["repo", "view", `${cand}/${ref}`, "--json", "name"], {
         timeoutMs: 15_000,
@@ -349,20 +353,20 @@ export async function getCliWorker(name: string): Promise<CliWorker | undefined>
   return findWorker(await loadState(), name);
 }
 
-export async function listCliWorkers(repo?: string): Promise<Array<CliWorker & { status: string }>> {
+export async function listCliWorkers(repo?: string): Promise<Array<CliWorker & { status: WorkerStatus }>> {
   const s = await loadState();
   const workers = Object.values(s.workers).filter((w) => !repo || w.repo === repo);
   return Promise.all(
     workers.map(async (w) => {
-      if (!(await tmuxHas(w.tmuxSession))) return { ...w, status: "ended" };
+      if (!(await tmuxHas(w.tmuxSession))) return { ...w, status: "ended" as const };
       let pane = "";
       try {
         pane = await capturePane(`${w.tmuxSession}:0`, 30);
       } catch {
-        return { ...w, status: "ended" };
+        return { ...w, status: "ended" as const };
       }
       const sig = agentSignals(w.agent ?? "claude");
-      const status = sig.trust?.pattern.test(pane)
+      const status: WorkerStatus = sig.trust?.pattern.test(pane)
         ? "blocked:trust"
         : sig.working.test(pane)
           ? "working"

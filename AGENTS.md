@@ -38,6 +38,19 @@ while a session runs.
   shell chaining rejected. When in doubt, deny.
 - Never weaken a gate to make a task pass. Never commit secrets; `.env` is gitignored.
 - Match existing style; keep modules small and single-purpose. No em dashes in output.
+- **Type safety (inspired by smoothie's AGENTS.md).** A finite set of values is NEVER typed as
+  `string` — model it as a union of literals. In practice:
+  - Zod tool inputs (`src/server.ts`): use `z.enum([...])` / `z.literal(...)`, never `z.string()`,
+    when the domain is closed. Keep `z.string()` only for genuinely open values (repo refs, tasks,
+    free text, worker names, a cross-provider `model` string).
+  - One source of truth per enum: define it once (e.g. `AgentKindSchema` in `agents.ts`), derive the
+    TS type (`z.infer`) and the runtime list (`.options`) from it, and reuse the schema in every tool
+    `inputSchema` so the enum is exposed to MCP clients. No hand-kept parallel copies.
+  - The orchestrator (`orchestrator.ts`) is an SDK agent, not an MCP client, so it does not receive
+    the zod schema. Inject the same source constants into its system prompt so its advice can't name
+    a value the tools would reject.
+  - Banned: `any`, `as` (type assertions; `as const` is fine), `@ts-ignore`, non-null `!`. Narrow
+    with type guards (`(x): x is T => ...`) instead of casting. Use discriminated unions for state.
 
 ## Self-improvement loop
 
